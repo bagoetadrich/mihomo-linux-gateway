@@ -233,6 +233,23 @@ systemctl list-timers mihomo-node-update.timer         # 确认已生效
 
 > 提醒：源里的免费节点随时可能全部失效；若两三个周期后 `journalctl -u mihomo` 显示节点全红，说明需要换一套源（编辑 `merge-sources.sh` 顶部的 URL 列表即可）。
 
+## 国内直连分流
+
+默认 `config.base.yaml` 已带"国内直连、其余走代理"分流：
+
+```yaml
+rules:
+  - GEOSITE,cn,DIRECT    # 中国域名 -> 直连(不绕代理)
+  - GEOIP,CN,DIRECT      # 中国 IP  -> 直连
+  - MATCH,🚀 节点选择      # 其余     -> 自动切换节点
+```
+
+geo 数据（`geosite.dat` / `geoip.dat`）由 `bootstrap.sh` 启动时从 jsdelivr 多 CDN 自动下载到 `data/`：
+
+- 下载成功：按上面规则分流（本地实测：百度/QQ 走 `DIRECT`，GitHub 走代理）
+- 全部 CDN 失败：自动注释掉 `GEOSITE/GEOIP` 两条，**退化为全流量走代理**，网关仍可用，不会因缺数据启动失败
+- 想调整分流：改 `config.base.yaml` 的 `rules` 段，再跑一次 `./up.sh`
+
 ## 安全与合规
 
 - 仓库内不要提交 `config.yaml`、`Country.mmdb`、`GeoSite.dat`、`ruleset/`（已在 `.gitignore`）

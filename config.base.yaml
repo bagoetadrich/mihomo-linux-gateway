@@ -2,11 +2,17 @@
 # config.base.yaml —— 纯 Docker 一键部署用的公共基础模板
 # 不含任何节点(节点由 merge-sources.sh 从公开源实时拉取合并)。
 #
+# 规则分流:
+#   GEOSITE,cn + GEOIP,CN -> DIRECT  国内直连, 不绕代理
+#   MATCH                -> 代理     其余走自动切换节点
+# 需要 geo 数据文件(geosite.dat / geoip.dat), 由 bootstrap.sh
+# 启动时自动下载; 下载失败时 bootstrap 会自动注释掉这两条
+# 规则退化为"全流量走代理", 保证网关始终可用。
+#
 # 说明:
-# - 顶部的 mixed-port / allow-lan / bind-address / dns 会被
-#   merge-sources.sh 原样保留进最终 config(HEAD 到 proxies: 为止)
-# - 底部的 rules 决定流量出口组名(此处 MATCH -> 🚀 节点选择,
-#   该组会被 merge 重建成 url-test 自动切换)
+# - 顶部的字段会被 merge-sources.sh 原样保留进最终 config
+#   (HEAD 到 proxies: 为止)
+# - 底部的 rules 决定流量出口(此处国内直连 + 其余代理)
 # - 中间的 `proxies: []` 只是"HEAD 结束标记", 会被 merge 丢弃
 # ============================================================
 
@@ -16,14 +22,21 @@ bind-address: 0.0.0.0
 mode: rule
 log-level: info
 
+# 使用 geosite.dat / geoip.dat 格式(与 meta-rules-dat 分发一致)
+geodata-mode: true
+
 dns:
   enable: true
   nameserver:
     - 223.5.5.5
     - 119.29.29.29
-  enhanced-mode: redir-host
+  nameserver-policy:
+    # 国内域名直接走国内 DNS, 避免 DNS 污染导致直连判断出错
+    "geosite:cn": 223.5.5.5
 
 proxies: []
 
 rules:
+  - GEOSITE,cn,DIRECT
+  - GEOIP,CN,DIRECT
   - MATCH,🚀 节点选择
