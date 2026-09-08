@@ -1,0 +1,29 @@
+# ============================================================
+# config.base.yaml —— 纯 Docker 一键部署用的公共基础模板
+# 不含任何节点(节点由 merge-sources.sh 从公开源实时拉取合并)。
+#
+# 说明:
+# - 顶部的 mixed-port / allow-lan / bind-address / dns 会被
+#   merge-sources.sh 原样保留进最终 config(HEAD 到 proxies: 为止)
+# - 底部的 rules 决定流量出口组名(此处 MATCH -> 🚀 节点选择,
+#   该组会被 merge 重建成 url-test 自动切换)
+# - 中间的 `proxies: []` 只是"HEAD 结束标记", 会被 merge 丢弃
+# ============================================================
+
+mixed-port: 7890
+allow-lan: true
+bind-address: 0.0.0.0
+mode: rule
+log-level: info
+
+dns:
+  enable: true
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  enhanced-mode: redir-host
+
+proxies: []
+
+rules:
+  - MATCH,🚀 节点选择

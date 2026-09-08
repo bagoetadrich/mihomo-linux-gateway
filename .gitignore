@@ -12,3 +12,6 @@ cache.db
 # 下载的二进制/压缩包
 *.gz
 *.bin
+
+# docker 数据目录(运行期自动生成的 config.yaml 等)
+data/

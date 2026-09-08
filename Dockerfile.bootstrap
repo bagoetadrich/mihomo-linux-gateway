@@ -1,0 +1,14 @@
+# bootstrap 镜像: 轻量(仅 bash+curl), 负责"抓源 -> 合并 -> 生成 config.yaml"
+# 内核本体用官方 metacubex/mihomo 镜像, 这里不下载任何内核, 构建不依赖 GitHub
+FROM alpine:3.20
+
+RUN apk add --no-cache bash curl ca-certificates
+
+COPY merge-sources.sh /usr/local/bin/merge-sources.sh
+COPY config.base.yaml /app/config.base.yaml
+COPY bootstrap.sh /usr/local/bin/bootstrap.sh
+
+RUN chmod +x /usr/local/bin/merge-sources.sh /usr/local/bin/bootstrap.sh
+
+WORKDIR /work
+CMD ["/usr/local/bin/bootstrap.sh"]

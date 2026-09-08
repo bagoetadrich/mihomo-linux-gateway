@@ -1,29 +1,45 @@
-# mihomo 网关的 Docker Compose 方式（与 systemd 方式二选一）
+# ============================================================
+# 纯 Docker 一键自举(推荐): 不需要本地 ChromeGo / 不需要手动迁移
 #
-# 说明：
-# - 用 host 网络：容器直接复用宿主机网络栈，能访问 ZeroTier 虚拟网卡，
-#   也省去端口映射；因此本机对外仍是 0.0.0.0:7890（受宿主机 ufw 约束）。
-# - 挂载整个项目目录到 /etc/mihomo：config.yaml、Country.mmdb、GeoSite.dat、
-#   ruleset/ 全部取自宿主机上 migrate-config.sh 生成的那一份。
-# - 纯网关共享场景不需要 NET_ADMIN；要开 TUN 才需要 cap_add 那两行。
+# 用法:
+#   ./up.sh                       # 首次部署 / 日常启动(自动生成节点池)
+#   docker compose run --rm bootstrap   # 想立刻刷新一次节点池
+#   docker compose restart mihomo       # 手动重载
 #
-# 使用：
-#   docker compose up -d
-#   docker compose logs -f
-#   docker compose restart        # 更新 config.yaml 后重启生效
+# 架构:
+#   - bootstrap(轻量镜像): 抓 ChromeGo 公开源 -> 合并去重 ->
+#     用内置 config.base.yaml 生成 ./data/config.yaml, 跑完即退
+#   - mihomo(官方镜像): 加载 ./data/config.yaml, host 网络监听 0.0.0.0:7890
+#     (ZeroTier 虚拟网卡对容器可见, 各设备把代理指到 <服务器>:7890)
+# ============================================================
 services:
+  bootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile.bootstrap
+    image: mihomo-gateway-bootstrap:local
+    container_name: mihomo-bootstrap
+    network_mode: host          # 拉公开源直接走宿主网络
+    volumes:
+      - ./data:/work
+    restart: "no"
+
   mihomo:
     image: metacubex/mihomo:latest
     container_name: mihomo
     restart: unless-stopped
-    network_mode: host
+    network_mode: host          # 必须 host: 才能看见 ZeroTier 网卡
+    user: root                  # 保证对 ./data 可写; 介意可去掉并自行 chown
     volumes:
-      - ./:/etc/mihomo
+      - ./data:/etc/mihomo
     command: ["-d", "/etc/mihomo"]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
     cap_add:
-      - NET_ADMIN # TUN 才需要，可注释
-      - NET_RAW # TUN 才需要，可注释
-    # devices: # TUN 才需要，可注释；宿主需存在 /dev/net/tun
+      - NET_ADMIN               # TUN 才需要, 纯网关共享可注释
+      - NET_RAW                 # TUN 才需要, 纯网关共享可注释
+    # devices:                  # TUN 才需要, 宿主需存在 /dev/net/tun
     #   - /dev/net/tun:/dev/net/tun
     environment:
       - TZ=Asia/Shanghai

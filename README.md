@@ -47,14 +47,22 @@ curl -x http://<服务器ZT-IP>:7890 https://ipinfo.io/ip
 
 ```
 mihomo-linux-gateway/
-├─ README.md            # 本文档
-├─ migrate-config.sh    # 读 Windows 配置 → 生成服务器版 config.yaml（+复制规则资源）
-├─ install.sh           # 服务器上：下载内核、放配置、注册 systemd
-├─ patch-lan.sh         # config 被覆盖后一键恢复 allow-lan/bind-address
-├─ mihomo.service       # systemd 单元
-├─ docker-compose.yml   # （可选）Docker Compose 方式
-└─ .gitignore           # 迁移产物与规则资源不入库
+├─ README.md                 # 本文档
+├─ migrate-config.sh         # （systemd 方式）读 Windows 配置 → 生成服务器版 config.yaml
+├─ merge-sources.sh          # 抓 ChromeGo 多源 → 去重合并节点 → url-test 自动切换池
+├─ config.base.yaml          # 公共基础模板(无节点)，纯 Docker 自举时作为底料
+├─ bootstrap.sh              # bootstrap 容器入口：模板 + merge 生成 ./data/config.yaml
+├─ Dockerfile.bootstrap      # bootstrap 轻量镜像(alpine+curl)，不含内核
+├─ up.sh                     # 服务器一键：构建→生成节点池→docker compose up
+├─ docker-compose.yml        # Docker 方式(bootstrap 生成配置 + 官方 mihomo 镜像)
+├─ install.sh                # （systemd 方式）服务器安装脚本
+├─ patch-lan.sh              # config 被覆盖后一键恢复 allow-lan/bind-address
+├─ mihomo.service            # systemd 单元
+├─ mihomo-node-update.{service,timer}   # （可选）systemd 定时自动刷节点池
+└─ .gitignore                # 迁移产物/节点池/数据目录不入库
 ```
+
+> `config.yaml`（含节点池）、`Country.mmdb`、`GeoSite.dat`、`ruleset/`、`data/` 均已被 `.gitignore` 挡住，不会提交——仓库里永远只有工程代码与公共模板。
 
 迁移后还会在本地生成（已 gitignore，勿提交）：`config.yaml`、`Country.mmdb`、`GeoSite.dat`、`ruleset/`。
 
@@ -95,33 +103,40 @@ sudo ufw allow from 10.147.0.0/16 to any port 7890 proto tcp
 
 > 监听是 `0.0.0.0`，但**别让公网连到 7890**。ZeroTier 网段固定，用它精确限源；不信任的网内设备再考虑 `authentication`（代价是 URL 会带密码，能不加就不加）。
 
-## 方式二：Docker Compose（可选，替代上面的 install.sh）
+## 方式二（推荐）：纯 Docker 一键自举
 
-不想在宿主机装 systemd 服务时用 Compose。目录已经带了 `docker-compose.yml`：
+**不需要本地 ChromeGo、不需要 migrate、不需要手动传 config。** 服务器 `git clone` 后一条命令，节点池由镜像自己从公开源拉取生成：
 
 ```bash
-# 前提：已用 migrate-config.sh 生成好 config.yaml 与规则资源
-docker compose up -d
-docker compose ps            # 健康状态
-docker compose logs -f       # 看日志
+# 服务器(已装 docker + compose v2)
+git clone https://github.com/bagoetadrich/mihomo-linux-gateway.git /opt/mihomo-gateway
+cd /opt/mihomo-gateway
+./up.sh
 ```
 
-几个设计点：
+`up.sh` 做了什么（以后每次启动/刷新都跑它）：
 
-- **`network_mode: host`**：容器复用宿主机网络栈，能直接看到 ZeroTier 虚拟网卡——网关场景基本必须 host 网络，别用默认 bridge（那会看不到 ZT 网卡，还要绕端口映射）
-- **挂载 `./` 到 `/etc/mihomo`**：容器用的就是宿主机上那份 migrate 产物；更新节点后 `docker compose restart` 即生效
-- **`cap_add` 的 `NET_ADMIN`/`NET_RAW` 默认注释意义**：纯网关共享用不上；哪天开 TUN 再放开
-- **文件权限**：mihomo 官方镜像默认非 root 运行；若容器报读配置权限错误，给 `config.yaml` 等挂载文件 `chmod 644`（单用户服务器可接受，介意就把镜像换成 root 运行的构建）
-- 防火墙照旧在**宿主机**配（第五步的 ufw 规则），host 网络下容器不受 docker 自身 iptables 影响
+1. 首次先构建 `bootstrap` 镜像（轻量：仅 bash+curl，不下载内核）
+2. 跑一次 `bootstrap`：抓 ChromeGo 全部镜像源 → 去重合并 → 用内置 `config.base.yaml` 生成 `./data/config.yaml`；本次拉源全挂但已有旧 config 时**沿用旧配置不中断**
+3. `docker compose up -d` 启动 mihomo（官方镜像，host 网络监听 `0.0.0.0:7890`）
 
-日常运维对照：
+日常运维：
 
-| 操作 | systemd 方式 | Docker 方式 |
-| --- | --- | --- |
-| 启动/开机自启 | `sudo systemctl enable --now mihomo` | `docker compose up -d` |
-| 看日志 | `journalctl -u mihomo -o cat -f` | `docker compose logs -f` |
-| 重载配置 | `sudo systemctl reload mihomo` | 先 `patch-lan.sh` 或换 config，再 `docker compose restart` |
-| config 被覆盖 | `sudo ./patch-lan.sh && sudo systemctl restart mihomo` | `sudo ./patch-lan.sh && docker compose restart` |
+| 操作 | 命令 |
+| --- | --- |
+| 启动 / 查看 | `./up.sh` → `docker compose ps` / `docker compose logs -f` |
+| 立刻刷新一次节点池 | `docker compose run --rm bootstrap && docker compose restart mihomo` |
+| 定时自动刷新（可选） | 宿主机 cron：`0 */6 * * * cd /opt/mihomo-gateway && docker compose run --rm bootstrap && docker compose restart mihomo` |
+| 更新工程代码 | `git pull && ./up.sh` |
+| 看生成的节点池 | `cat data/config.yaml`（仅本机，不入 git） |
+
+设计点：
+
+- **`network_mode: host`**：容器直接复用宿主网络栈，看得见 ZeroTier 虚拟网卡，也免端口映射（`0.0.0.0:7890` 依旧受宿主机 ufw 约束）
+- **两个服务共享 `./data`**：bootstrap 负责生成 config，mihomo 官方镜像加载它；`depends_on: service_completed_successfully` 保证配置先生成好
+- **不依赖构建时访问 GitHub**：内核来自 `metacubex/mihomo:latest` 官方镜像，bootstrap 只装 curl/bash
+- **`user: root`** 避免 ./data 写权限问题（单用户内网网关可接受；介意可去掉并自行 `chown`）
+- 防火墙照旧在**宿主机**配 ufw，只放行 ZeroTier 网段到 7890
 
 ## 各端怎么接入
 
