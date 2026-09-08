@@ -26,8 +26,10 @@ if ! docker compose run --rm bootstrap; then
   echo "[up] bootstrap 未能生成新配置; 若 data/config.yaml 已存在将沿用旧配置继续启动。"
 fi
 
-echo "[up] 启动 mihomo ..."
+echo "[up] 启动/更新 mihomo ..."
 docker compose up -d
+# config 刚被 bootstrap 更新过, 重启一次让 mihomo 加载新配置(短暂闪断可接受)
+docker compose restart mihomo
 docker compose ps
 echo
 echo "验证(服务器本机): curl -x http://127.0.0.1:7890 -sS -o /dev/null -w '%{http_code}\n' https://www.gstatic.com/generate_204"
