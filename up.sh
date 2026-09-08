@@ -16,11 +16,10 @@ cd "$(dirname "$0")"
 
 mkdir -p data
 
-# 首次才构建(bootstrap 很小, 只装 curl/bash)
-if ! docker image inspect mihomo-gateway-bootstrap:local >/dev/null 2>&1; then
-  echo "[up] 首次运行, 构建 bootstrap 镜像 ..."
-  docker compose build bootstrap
-fi
+# 每次构建 bootstrap(bootstrap.sh / config.base.yaml 更新必须重打包);
+# apk 层有缓存, 代码变更后通常只重跑 COPY 层, 很快
+echo "[up] 构建/更新 bootstrap 镜像 ..."
+docker compose build bootstrap
 
 echo "[up] 生成/刷新节点池 ..."
 if ! docker compose run --rm bootstrap; then
