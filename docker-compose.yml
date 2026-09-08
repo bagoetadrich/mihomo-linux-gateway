@@ -1,0 +1,29 @@
+# mihomo 网关的 Docker Compose 方式（与 systemd 方式二选一）
+#
+# 说明：
+# - 用 host 网络：容器直接复用宿主机网络栈，能访问 ZeroTier 虚拟网卡，
+#   也省去端口映射；因此本机对外仍是 0.0.0.0:7890（受宿主机 ufw 约束）。
+# - 挂载整个项目目录到 /etc/mihomo：config.yaml、Country.mmdb、GeoSite.dat、
+#   ruleset/ 全部取自宿主机上 migrate-config.sh 生成的那一份。
+# - 纯网关共享场景不需要 NET_ADMIN；要开 TUN 才需要 cap_add 那两行。
+#
+# 使用：
+#   docker compose up -d
+#   docker compose logs -f
+#   docker compose restart        # 更新 config.yaml 后重启生效
+services:
+  mihomo:
+    image: metacubex/mihomo:latest
+    container_name: mihomo
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./:/etc/mihomo
+    command: ["-d", "/etc/mihomo"]
+    cap_add:
+      - NET_ADMIN # TUN 才需要，可注释
+      - NET_RAW # TUN 才需要，可注释
+    # devices: # TUN 才需要，可注释；宿主需存在 /dev/net/tun
+    #   - /dev/net/tun:/dev/net/tun
+    environment:
+      - TZ=Asia/Shanghai

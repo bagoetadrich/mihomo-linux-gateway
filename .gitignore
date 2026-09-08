@@ -1,0 +1,14 @@
+# 迁移产物/敏感内容不入库
+config.yaml
+config.yaml.bak.*
+Country.mmdb
+GeoSite.dat
+ruleset/
+
+# mihomo 运行产物（docker 挂载目录时会在宿主生成）
+cache.db
+*.db
+
+# 下载的二进制/压缩包
+*.gz
+*.bin
