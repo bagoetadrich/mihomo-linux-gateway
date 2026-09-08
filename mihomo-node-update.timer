@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically refresh mihomo node pool (auto adapt to drifting free-node IPs)
+
+[Timer]
+# 每天两次: 节点漂移通常发生在小时级, 一天两次足够
+OnCalendar=*-*-* 05:30:00
+OnCalendar=*-*-* 17:30:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

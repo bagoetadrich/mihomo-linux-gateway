@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh mihomo node pool from ChromeGo ip sources
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# 1) 抓多源 -> 合并 -> 写 config.new
+ExecStart=/opt/mihomo-linux-gateway/merge-sources.sh /etc/mihomo/config.yaml /etc/mihomo/config.yaml.new
+# 2) 原子替换
+ExecStart=/bin/mv /etc/mihomo/config.yaml.new /etc/mihomo/config.yaml
+# 3) 生效
+ExecStart=/bin/systemctl restart mihomo

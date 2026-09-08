@@ -187,6 +187,37 @@ tun:
 | `ping` 不通但 `curl` 正常 | ICMP 不在代理范围 | 正常现象 |
 | 公网扫到 7890 | 没限源 | `ufw` 只放行 ZeroTier 网段 |
 
+## 进阶：多源自动切换（免费漂移节点的自愈）
+
+ChromeGo 这类免费节点 IP 会周期性漂移，单节点配置一旦 IP 失效就全断。仓库提供了 `merge-sources.sh`，把"手动跑 ip 更新"变成服务器上的自动闭环：
+
+```bash
+# 手动跑一次（抓 ChromeGo 全部镜像源 -> 合并去重 -> 生成新 config）
+cd /opt/mihomo-linux-gateway
+./merge-sources.sh /etc/mihomo/config.yaml /etc/mihomo/config.yaml.new
+# 人工确认无异常后
+sudo mv /etc/mihomo/config.yaml.new /etc/mihomo/config.yaml
+sudo systemctl restart mihomo
+```
+
+它做了什么：
+
+- 抓取 ChromeGo 的 6 个镜像源（gitlab + 备用域，单源失败自动跳过），解析各自 hysteria 节点，按 `server:port` 去重
+- `proxies` 换成合并后的全部节点；新增 `♻️ 自动切换`（`url-test`，每 60s 测活，**坏 IP 自动摘除、自动用活 IP**）
+- `🚀 节点选择` 顶层组默认指向自动切换；原 rules 引用的策略组全部保留
+- 头部（`allow-lan`/`mixed-port`/`dns` 等）与 `rules` 原样保留，只换节点池
+
+定时自愈（可选，推荐）：
+
+```bash
+sudo cp mihomo-node-update.service mihomo-node-update.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now mihomo-node-update.timer   # 每天 05:30 / 17:30 自动刷新并重启 mihomo
+systemctl list-timers mihomo-node-update.timer         # 确认已生效
+```
+
+> 提醒：源里的免费节点随时可能全部失效；若两三个周期后 `journalctl -u mihomo` 显示节点全红，说明需要换一套源（编辑 `merge-sources.sh` 顶部的 URL 列表即可）。
+
 ## 安全与合规
 
 - 仓库内不要提交 `config.yaml`、`Country.mmdb`、`GeoSite.dat`、`ruleset/`（已在 `.gitignore`）
