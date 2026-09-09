@@ -3,13 +3,13 @@
 # 不含任何节点(节点由 merge-sources.sh 从公开源实时拉取合并)。
 #
 # 规则分流:
-#   GEOSITE,!cn -> 代理       非中国域名走代理（优先匹配）
-#   GEOSITE,cn  -> DIRECT     中国域名直连
-#   GEOIP,CN    -> DIRECT     中国 IP 直连
-#   MATCH       -> 代理       其余流量走代理
+#   DOMAIN-SUFFIX 指定国外常见域名 -> 代理
+#   GEOSITE,cn   -> DIRECT  中国域名直连
+#   GEOIP,CN     -> DIRECT  中国 IP 直连
+#   MATCH        -> 代理    其余流量走代理
 # 需要 geo 数据文件(geosite.dat / geoip.dat), 由 bootstrap.sh
-# 启动时自动下载; 下载失败时 bootstrap 会自动注释掉这两条
-# 规则退化为"全流量走代理", 保证网关始终可用。
+# 启动时自动下载; 下载失败时 bootstrap 会自动注释掉 GEOSITE/GEOIP 规则,
+# 退化为"全流量走代理", 保证网关始终可用。
 #
 # 说明:
 # - 顶部的字段会被 merge-sources.sh 原样保留进最终 config
@@ -35,14 +35,27 @@ dns:
   nameserver-policy:
     # 国内域名直接走国内 DNS, 避免 DNS 污染导致直连判断出错
     "geosite:cn": 223.5.5.5
-    # 非中国域名走 Google DNS，确保解析到正确 IP
-    "geosite:!cn": 8.8.8.8
 
 proxies: []
 
 rules:
-  # 非中国域名 -> 代理（优先匹配，避免被后续 GEOIP 误判）
-  - GEOSITE,!cn,🚀 节点选择
+  # 强制走代理的国外域名（可按需增删）
+  - DOMAIN-SUFFIX,google.com,🚀 节点选择
+  - DOMAIN-SUFFIX,youtube.com,🚀 节点选择
+  - DOMAIN-SUFFIX,twitter.com,🚀 节点选择
+  - DOMAIN-SUFFIX,facebook.com,🚀 节点选择
+  - DOMAIN-SUFFIX,instagram.com,🚀 节点选择
+  - DOMAIN-SUFFIX,github.com,🚀 节点选择
+  - DOMAIN-SUFFIX,ip.sb,🚀 节点选择
+  - DOMAIN-SUFFIX,cloudflare.com,🚀 节点选择
+  - DOMAIN-SUFFIX,telegram.org,🚀 节点选择
+  - DOMAIN-SUFFIX,whatsapp.com,🚀 节点选择
+  - DOMAIN-SUFFIX,zoom.us,🚀 节点选择
+  - DOMAIN-SUFFIX,netflix.com,🚀 节点选择
+  - DOMAIN-SUFFIX,amazon.com,🚀 节点选择
+  - DOMAIN-SUFFIX,openai.com,🚀 节点选择
+  - DOMAIN-SUFFIX,chatgpt.com,🚀 节点选择
+
   # 中国域名 -> 直连
   - GEOSITE,cn,DIRECT
   # 中国 IP -> 直连
