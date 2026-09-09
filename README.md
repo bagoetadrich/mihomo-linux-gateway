@@ -3,8 +3,8 @@
 把 Windows 上现成的 Clash.Meta 配置（例如 ChromeGo 便携包）改造成 **Linux 服务器代理网关**的一键落地包。ZeroTier 网段里的所有设备（Windows / Linux / 手机 / 平板）只要把代理指向这台服务器，就全都有了出口。
 
 > 相关博客：
-> - [《全局代理折腾记：从"只有 Chrome 能用"到 Windows 临时当网关》](https://tblog.bagoet.cn/posts/chromego-clash-meta-global-proxy/)（问题排查与临时网关方案）
-> - [《把代理装进服务器：ZeroTier 全网共用一台出口》](https://tblog.bagoet.cn/posts/mihomo-server-zerotier-gateway/)（本文档对应的教程）
+> - [《全局代理折腾记：从"只有 Chrome 能用"到 Windows 临时当网关》](https://tblog.bagoet.cn/posts/network-proxy/chromego-clash-meta-global-proxy/)（问题排查与临时网关方案）
+> - [《把代理装进服务器：ZeroTier 全网共用一台出口》](https://tblog.bagoet.cn/posts/network-proxy/mihomo-server-zerotier-gateway/)（本文档对应的教程）
 
 ## 5 分钟速通
 
