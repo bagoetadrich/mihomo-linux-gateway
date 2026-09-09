@@ -3,8 +3,10 @@
 # 不含任何节点(节点由 merge-sources.sh 从公开源实时拉取合并)。
 #
 # 规则分流:
-#   GEOSITE,cn + GEOIP,CN -> DIRECT  国内直连, 不绕代理
-#   MATCH                -> 代理     其余走自动切换节点
+#   GEOSITE,!cn -> 代理       非中国域名走代理（优先匹配）
+#   GEOSITE,cn  -> DIRECT     中国域名直连
+#   GEOIP,CN    -> DIRECT     中国 IP 直连
+#   MATCH       -> 代理       其余流量走代理
 # 需要 geo 数据文件(geosite.dat / geoip.dat), 由 bootstrap.sh
 # 启动时自动下载; 下载失败时 bootstrap 会自动注释掉这两条
 # 规则退化为"全流量走代理", 保证网关始终可用。
@@ -33,10 +35,17 @@ dns:
   nameserver-policy:
     # 国内域名直接走国内 DNS, 避免 DNS 污染导致直连判断出错
     "geosite:cn": 223.5.5.5
+    # 非中国域名走 Google DNS，确保解析到正确 IP
+    "geosite:!cn": 8.8.8.8
 
 proxies: []
 
 rules:
+  # 非中国域名 -> 代理（优先匹配，避免被后续 GEOIP 误判）
+  - GEOSITE,!cn,🚀 节点选择
+  # 中国域名 -> 直连
   - GEOSITE,cn,DIRECT
+  # 中国 IP -> 直连
   - GEOIP,CN,DIRECT
+  # 其余流量 -> 代理（兜底）
   - MATCH,🚀 节点选择
