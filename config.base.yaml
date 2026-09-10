@@ -50,6 +50,33 @@ dns:
     # 国内域名直接走国内 DNS, 避免 DNS 污染导致直连判断出错
     "geosite:cn": 223.5.5.5
 
+# ============================================================
+# 流量嗅探: 从 TLS SNI / HTTP Host 反查真实域名。
+#
+# 为什么需要: 手机流量经 tun2socks 到达 mihomo 时只剩 IP, 域名规则
+# (DOMAIN-SUFFIX) 匹配不到, 只能靠 GEOIP 判断。一旦 DNS 拿到污染 IP,
+# GEOIP 会把本该代理的域名误判成"国内直连"。
+# 开启后可从 SNI 反查域名 -> 命中域名规则 -> 正确走代理。
+#
+# override-destination: 用嗅探到的域名作为连接目标(而不是原 IP)。
+# 只嗅探 TLS/HTTP 的标准端口, 非标准协议不受影响。
+# ============================================================
+sniffer:
+  enable: true
+  override-destination: true
+  sniff:
+    TLS:
+      ports:
+        - 443
+        - 8443
+    HTTP:
+      ports:
+        - 80
+        - 8080-8880
+  skip-domain:
+    - "Mijia Cloud"
+    - "+.push.apple.com"
+
 proxies: []
 
 rules:
