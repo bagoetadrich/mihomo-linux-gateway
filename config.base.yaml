@@ -29,9 +29,23 @@ geodata-mode: true
 
 dns:
   enable: true
+  # 监听 1053, 供云服务器把手机(IKEv2 客户端)的 UDP 53 转发过来。
+  # 用高位端口而不是 53: 不和本机 systemd-resolved(127.0.0.53:53) 抢端口。
+  listen: 0.0.0.0:1053
+  # 只返回 IPv4。隧道里没有 IPv6 通路, 返回 AAAA 只会让手机白等一轮超时。
+  ipv6: false
   nameserver:
     - 223.5.5.5
     - 119.29.29.29
+  # 国外/被污染域名: 用 DoH 经节点查询(走 HTTPS/TCP, 干净且不受 UDP 限制)
+  fallback:
+    - "https://1.1.1.1/dns-query#🚀 节点选择"
+    - "https://8.8.8.8/dns-query#🚀 节点选择"
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
   nameserver-policy:
     # 国内域名直接走国内 DNS, 避免 DNS 污染导致直连判断出错
     "geosite:cn": 223.5.5.5
@@ -43,6 +57,9 @@ rules:
   - DOMAIN-SUFFIX,google.com,🚀 节点选择
   - DOMAIN-SUFFIX,youtube.com,🚀 节点选择
   - DOMAIN-SUFFIX,twitter.com,🚀 节点选择
+  - DOMAIN-SUFFIX,x.com,🚀 节点选择
+  - DOMAIN-SUFFIX,twimg.com,🚀 节点选择
+  - DOMAIN-SUFFIX,t.co,🚀 节点选择
   - DOMAIN-SUFFIX,facebook.com,🚀 节点选择
   - DOMAIN-SUFFIX,instagram.com,🚀 节点选择
   - DOMAIN-SUFFIX,github.com,🚀 节点选择
