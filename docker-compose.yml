@@ -2,15 +2,18 @@
 # 纯 Docker 一键自举(推荐): 不需要本地 ChromeGo / 不需要手动迁移
 #
 # 用法:
-#   ./up.sh                       # 首次部署 / 日常启动(自动生成节点池)
+#   ./up.sh                       # 首次部署 / 日常启动(自动生成节点池 + 启动面板)
 #   docker compose run --rm bootstrap   # 想立刻刷新一次节点池
 #   docker compose restart mihomo       # 手动重载
 #
 # 架构:
-#   - bootstrap(轻量镜像): 抓 ChromeGo 公开源 -> 合并去重 ->
+#   - bootstrap(轻量镜像): 按 config/sources.txt 抓源 -> 合并去重 ->
 #     用内置 config.base.yaml 生成 ./data/config.yaml, 跑完即退
 #   - mihomo(官方镜像): 加载 ./data/config.yaml, host 网络监听 0.0.0.0:7890
 #     (ZeroTier 虚拟网卡对容器可见, 各设备把代理指到 <服务器>:7890)
+#   - panel(本仓库自建, 零依赖): 管理面板。
+#     通过 127.0.0.1:9090 读写 mihomo API, 通过 docker.sock 重启容器,
+#     通过 ./config/sources.txt 管理节点源。默认监听 0.0.0.0:9091。
 # ============================================================
 services:
   bootstrap:
@@ -22,6 +25,7 @@ services:
     network_mode: host          # 拉公开源直接走宿主网络
     volumes:
       - ./data:/work
+      - ./config:/app/config:ro # 只读挂载节点源列表(config/sources.txt)
     restart: "no"
 
   mihomo:
@@ -43,3 +47,49 @@ services:
     #   - /dev/net/tun:/dev/net/tun
     environment:
       - TZ=Asia/Shanghai
+
+  panel:
+    build:
+      context: ./panel
+      dockerfile: Dockerfile
+    image: mihomo-gateway-panel:local
+    container_name: mihomo-panel
+    restart: unless-stopped
+    network_mode: host          # 必须 host: 才能访问 mihomo 的 127.0.0.1:9090
+    user: root
+    volumes:
+      # 用于重启/启停容器。注意：重启是写操作，不能加 :ro（只读挂载会失败）。
+      # 挂了它 = 把宿主机 root 权限交给本容器，介意请删掉这行（见 README「面板的安全边界」）
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config:/repo/config                          # 读写节点源列表
+      - ./data/panel:/panel-data                       # 流量统计落盘
+    environment:
+      - TZ=Asia/Shanghai
+      - PANEL_LISTEN=${PANEL_LISTEN:-0.0.0.0}
+      - PANEL_PORT=${PANEL_PORT:-9091}
+      - PANEL_PASSWORD=${PANEL_PASSWORD:-}
+      - PANEL_DATA=/panel-data
+      - REPO_DIR=/repo
+      - SOURCES_FILE=/repo/config/sources.txt
+      - DEVICES_FILE=/repo/config/devices.json
+      - HOST_MOUNT=/repo/config
+      - MIHOMO_API=http://127.0.0.1:9090
+      - MIHOMO_SECRET=${MIHOMO_SECRET:-}
+      - MIHOMO_CONTAINER=mihomo
+      - BOOTSTRAP_CONTAINER=mihomo-bootstrap
+      # 邮件告警（可选。也可以直接在面板「运维 → 邮件告警」里配置，存到 data/panel/）
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-网关告警}
+      - ALERT_TO=${ALERT_TO:-}
+      - ALERT_ENABLED=${ALERT_ENABLED:-false}
+      # 可选：让你的 VPN / ZeroTier 网段在「设备」页显示成友好名字。
+      # 逗号分隔的 IP 前缀，例如 ZT_NETS=10.147.0.    VPN_NETS=10.10.0.
+      - ZT_NETS=${ZT_NETS:-}
+      - VPN_NETS=${VPN_NETS:-}
+    depends_on:
+      mihomo:
+        condition: service_started

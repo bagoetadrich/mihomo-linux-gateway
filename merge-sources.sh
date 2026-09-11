@@ -25,14 +25,42 @@ set -euo pipefail
 BASE="${1:?用法: merge-sources.sh <当前config.yaml> [输出文件]}"
 OUT="${2:-}"
 
-# ---------------- ChromeGo 的 IP 更新源(与 ip_N.bat 同一批) ----------------
-GITLAB="https://gitlab.com/free9999/ipupdate/-/raw/master/backup/img/1/2/ipp/clash.meta2"
-MIRROR="https://www.67867867.xyz/Alvin9999/PAC/refs/heads/master/backup/img/1/2/ipp/clash.meta2"
+# ---------------- 节点源列表(从 config/sources.txt 读取, 可用面板增删) ----------------
+# 格式: 每行一个 URL; {i} 展开为 1..6 (与 ChromeGo 的 ip_1..ip_6 一致)
+# 可用环境变量 SOURCES_FILE 覆盖路径
+SOURCES_FILE="${SOURCES_FILE:-/app/config/sources.txt}"
+if [ ! -f "$SOURCES_FILE" ]; then
+  SOURCES_FILE="$(cd "$(dirname "$0")" && pwd)/config/sources.txt"
+fi
+
 SOURCES=()
-for i in 1 2 3 4 5 6; do
-  SOURCES+=("$GITLAB/$i/config.yaml")
-  SOURCES+=("$MIRROR/$i/config.yaml")
-done
+if [ -f "$SOURCES_FILE" ]; then
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    line="$(printf '%s' "$raw" | sed 's/[[:space:]]*#.*$//' | tr -d '[:space:]')"
+    [ -z "$line" ] && continue
+    if printf '%s' "$line" | grep -q '{i}'; then
+      for i in 1 2 3 4 5 6; do
+        SOURCES+=("$(printf '%s' "$line" | sed "s/{i}/$i/g")")
+      done
+    else
+      SOURCES+=("$line")
+    fi
+  done < "$SOURCES_FILE"
+  echo "源列表: $SOURCES_FILE -> 展开为 ${#SOURCES[@]} 个 URL"
+else
+  echo "警告: 未找到源列表文件 $SOURCES_FILE" >&2
+fi
+
+# 兜底: 文件缺失或一行都没解析出来时, 回退到内置默认源(保持向后兼容)
+if [ "${#SOURCES[@]}" -eq 0 ]; then
+  GITLAB="https://gitlab.com/free9999/ipupdate/-/raw/master/backup/img/1/2/ipp/clash.meta2"
+  MIRROR="https://www.67867867.xyz/Alvin9999/PAC/refs/heads/master/backup/img/1/2/ipp/clash.meta2"
+  for i in 1 2 3 4 5 6; do
+    SOURCES+=("$GITLAB/$i/config.yaml")
+    SOURCES+=("$MIRROR/$i/config.yaml")
+  done
+  echo "已回退到内置默认源: ${#SOURCES[@]} 个 URL" >&2
+fi
 
 # ---------------- 解析单个源里所有 hysteria 节点 ----------------
 # 输出: "server\tport\tauth" 每节点一行

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="robots" content="noindex, nofollow" />
+		<title>网关管理面板</title>
+		<link rel="stylesheet" href="/style.css" />
+	</head>
+	<body>
+		<!-- ---------- 登录 ---------- -->
+		<div id="login" class="login hidden">
+			<form class="login-card" autocomplete="off">
+				<div class="login-logo">mihomo</div>
+				<h1>网关管理面板</h1>
+				<p class="muted">请输入面板密码</p>
+				<input id="pw" type="password" placeholder="面板密码" autocomplete="current-password" />
+				<label class="remember"><input id="remember" type="checkbox" checked /> 记住这台设备</label>
+				<button type="submit" id="loginBtn">登录</button>
+				<div id="loginErr" class="err hidden"></div>
+			</form>
+		</div>
+
+		<!-- ---------- 主界面 ---------- -->
+		<div id="app" class="layout hidden">
+			<aside class="sidebar">
+				<div class="brand">
+					<span class="dot"></span>
+					<span>网关面板</span>
+				</div>
+				<nav id="nav">
+					<a href="#overview" data-view="overview"><i>▤</i>概览</a>
+					<a href="#devices" data-view="devices"><i>⛭</i>设备与连接</a>
+					<a href="#proxies" data-view="proxies"><i>⇄</i>节点</a>
+					<a href="#logs" data-view="logs"><i>≡</i>日志</a>
+					<a href="#sources" data-view="sources"><i>☰</i>节点源</a>
+					<a href="#ops" data-view="ops"><i>⚙</i>运维</a>
+				</nav>
+				<div class="sidebar-foot">
+					<div id="sideStatus" class="muted small">连接中...</div>
+					<button id="logoutBtn" class="ghost small">退出登录</button>
+				</div>
+			</aside>
+
+			<main class="main">
+				<header class="topbar">
+					<h2 id="viewTitle">概览</h2>
+					<div class="topbar-right">
+						<span id="rateMini" class="rate-mini">↑ 0 B/s&nbsp;&nbsp;↓ 0 B/s</span>
+						<button id="refreshBtn" class="ghost">刷新</button>
+					</div>
+				</header>
+				<section id="view" class="view"></section>
+			</main>
+		</div>
+
+		<div id="toast" class="toast hidden"></div>
+		<script src="/app.js"></script>
+	</body>
+</html>

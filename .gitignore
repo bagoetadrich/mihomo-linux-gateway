@@ -5,6 +5,22 @@ Country.mmdb
 GeoSite.dat
 ruleset/
 
+# 订阅源导出的配置文件（含节点凭据，严禁入库）
+Clash_*.yaml
+Clash_*.yml
+*_sub.yaml
+*_sub.yml
+subscribe*.yaml
+subscribe*.yml
+
+# 本地环境变量（含面板密码等，严禁入库）
+.env
+.env.*
+!.env.example
+
+# 面板运行产物
+data/panel/
+
 # mihomo 运行产物（docker 挂载目录时会在宿主生成）
 cache.db
 *.db

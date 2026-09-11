@@ -1,0 +1,16 @@
+{
+  "name": "mihomo-gateway-panel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "mihomo-linux-gateway 管理面板：API 反代 + 运维接口 + 流量统计 + 系统状态（零依赖）",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {}
+}

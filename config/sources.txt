@@ -1,0 +1,23 @@
+# =============================================================
+# 节点源列表 —— 每行一个 URL
+#
+# 规则:
+#   - 以 # 开头 = 注释; 行尾 # 之后的内容也会被忽略(前面需有空格)
+#   - 空行忽略
+#   - URL 中可写 {i} 占位符, 会展开成 1..6
+#     (ChromeGo 的 ip_1.bat ~ ip_6.bat 就是这个机制)
+#   - 不含 {i} 的行按原样使用
+#
+# 这个文件可以:
+#   - 手动编辑后跑 ./up.sh 生效
+#   - 或在管理面板(panel)的「节点源」页里增删, 保存后一键刷新
+# =============================================================
+
+# --- ChromeGo 官方 IP 更新源(默认, 两个镜像互为备份) ---
+https://gitlab.com/free9999/ipupdate/-/raw/master/backup/img/1/2/ipp/clash.meta2/{i}/config.yaml
+https://www.67867867.xyz/Alvin9999/PAC/refs/heads/master/backup/img/1/2/ipp/clash.meta2/{i}/config.yaml
+
+# --- 在这里追加你自己的源 ---
+# 例:
+# https://example.com/sub/{i}/config.yaml
+# https://another.example.com/fixed/subscription.yaml

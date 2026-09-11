@@ -48,18 +48,28 @@ curl -x http://<服务器ZT-IP>:7890 https://ipinfo.io/ip
 ```
 mihomo-linux-gateway/
 ├─ README.md                 # 本文档
+├─ config/
+│  ├─ sources.txt            # ★ 节点源列表(每行一个 URL, {i} 展开为 1..6)
+│  └─ devices.json           # (可选) 给设备起名: {"10.147.0.5": "我的手机"}
+├─ panel/                    # ★ 管理面板(零依赖 Node, 无构建步骤)
+│  ├─ server.js              #   后端: API 反代 + 运维接口 + 静态托管
+│  ├─ lib/{core,stats,auth}.js
+│  ├─ web/{index.html,app.js,style.css}
+│  ├─ Dockerfile
+│  └─ package.json
 ├─ migrate-config.sh         # （systemd 方式）读 Windows 配置 → 生成服务器版 config.yaml
-├─ merge-sources.sh          # 抓 ChromeGo 多源 → 去重合并节点 → url-test 自动切换池
+├─ merge-sources.sh          # 读 config/sources.txt → 抓源 → 去重合并 → url-test 自动切换池
 ├─ config.base.yaml          # 公共基础模板(无节点)，纯 Docker 自举时作为底料
 ├─ bootstrap.sh              # bootstrap 容器入口：模板 + merge 生成 ./data/config.yaml
 ├─ Dockerfile.bootstrap      # bootstrap 轻量镜像(alpine+curl)，不含内核
-├─ up.sh                     # 服务器一键：构建→生成节点池→docker compose up
-├─ docker-compose.yml        # Docker 方式(bootstrap 生成配置 + 官方 mihomo 镜像)
+├─ up.sh                     # 服务器一键：生成 .env→构建→生成节点池→docker compose up
+├─ .env.example              # 环境变量示例(面板密码/监听地址等)
+├─ docker-compose.yml        # Docker 方式(bootstrap + 官方 mihomo 镜像 + panel)
 ├─ install.sh                # （systemd 方式）服务器安装脚本
 ├─ patch-lan.sh              # config 被覆盖后一键恢复 allow-lan/bind-address
 ├─ mihomo.service            # systemd 单元
 ├─ mihomo-node-update.{service,timer}   # （可选）systemd 定时自动刷节点池
-└─ .gitignore                # 迁移产物/节点池/数据目录不入库
+└─ .gitignore                # 迁移产物/节点池/数据目录/.env 不入库
 ```
 
 > `config.yaml`（含节点池）、`Country.mmdb`、`GeoSite.dat`、`ruleset/`、`data/` 均已被 `.gitignore` 挡住，不会提交——仓库里永远只有工程代码与公共模板。
@@ -116,16 +126,21 @@ cd /opt/mihomo-gateway
 
 `up.sh` 做了什么（以后每次启动/刷新都跑它）：
 
-1. 首次先构建 `bootstrap` 镜像（轻量：仅 bash+curl，不下载内核）
-2. 跑一次 `bootstrap`：抓 ChromeGo 全部镜像源 → 去重合并 → 用内置 `config.base.yaml` 生成 `./data/config.yaml`；本次拉源全挂但已有旧 config 时**沿用旧配置不中断**
-3. `docker compose up -d` 启动 mihomo（官方镜像，host 网络监听 `0.0.0.0:7890`）
+0. 首次运行生成 `.env`（含**随机面板密码**），之后复用
+1. 构建 `bootstrap` / `panel` 镜像
+2. 跑一次 `bootstrap`：按 `config/sources.txt` 抓源 → 去重合并 → 用内置 `config.base.yaml` 生成 `./data/config.yaml`；本次拉源全挂但已有旧 config 时**沿用旧配置不中断**
+3. `docker compose up -d` 启动 mihomo（官方镜像，`0.0.0.0:7890`）与 panel（`0.0.0.0:9091`）
+
+跑完会打印面板地址和密码。
 
 日常运维：
 
 | 操作 | 命令 |
 | --- | --- |
 | 启动 / 查看 | `./up.sh` → `docker compose ps` / `docker compose logs -f` |
-| 立刻刷新一次节点池 | `docker compose run --rm bootstrap && docker compose restart mihomo` |
+| 打开管理面板 | 浏览器访问 `http://<服务器IP>:9091`（密码见 `.env`） |
+| 立刻刷新一次节点池 | 面板「运维 → 刷新节点池」，或 `docker compose run --rm bootstrap && docker compose restart mihomo` |
+| 改节点源 | 编辑 `config/sources.txt`，或面板「节点源」页在线改 |
 | 定时自动刷新（可选） | 宿主机 cron：`0 */6 * * * cd /opt/mihomo-gateway && docker compose run --rm bootstrap && docker compose restart mihomo` |
 | 更新工程代码 | `git pull && ./up.sh` |
 | 看生成的节点池 | `cat data/config.yaml`（仅本机，不入 git） |
@@ -137,6 +152,116 @@ cd /opt/mihomo-gateway
 - **不依赖构建时访问 GitHub**：内核来自 `metacubex/mihomo:latest` 官方镜像，bootstrap 只装 curl/bash
 - **`user: root`** 避免 ./data 写权限问题（单用户内网网关可接受；介意可去掉并自行 `chown`）
 - 防火墙照旧在**宿主机**配 ufw，只放行 ZeroTier 网段到 7890
+
+## 管理面板（panel）
+
+`./up.sh` 会额外起一个 `panel` 容器。浏览器打开 **`http://<服务器IP>:9091`** 就能管理整套网关，不用再 SSH 敲命令。
+
+**登录密码**在首次 `./up.sh` 时随机生成，写在仓库根目录的 `.env`（已 gitignore），`up.sh` 结束时会打印出来。忘了就查：
+
+```bash
+grep PANEL_PASSWORD .env
+```
+
+### 面板能做什么
+
+| 页面 | 内容 |
+| --- | --- |
+| **概览** | 实时上行/下行速率、今日/本月/累计流量、速率曲线、CPU/内存/磁盘/负载、容器状态与一键重启 |
+| **设备与连接** | 按来源 IP 聚合的「设备」视图 + 逐条连接明细（目标域名、命中规则、代理链路、上下行字节） |
+| **节点** | 策略组切换、节点列表、单个/全部测速 |
+| **日志** | mihomo 容器日志实时滚动（可暂停、清屏、重连） |
+| **节点源** | 在线编辑 `config/sources.txt`，保存后一键刷新节点池 |
+| **运维** | 刷新节点池、重启 mihomo、流量统计清零、容器启停 |
+
+> **为什么流量统计要自己做？** mihomo 的 API 只给「每条活动连接当前的字节数」和「瞬时速率」；连接一关数据就没了。所以 panel 每 2 秒采样一次 `/connections`，按增量累加，并定期落盘到 `data/panel/traffic.json`，重启不丢。
+
+**给设备起名字**：默认按 RFC1918 粗分（内网 / 局域网）。想显示成"我的手机"这种，编辑 `config/devices.json`：
+
+```json
+{
+  "10.147.0.5": "我的手机",
+  "10.147.0.2": "工作笔记本"
+}
+```
+
+也可以在 `.env` 里设 `ZT_NETS` / `VPN_NETS`（逗号分隔的 IP 前缀），让某个网段整体显示成"ZeroTier 设备"。**这两个值不会写进仓库代码里。**
+
+### 节点源现在是一个文件
+
+以前源列表写死在 `merge-sources.sh` 里，现在抽到了 **`config/sources.txt`**：
+
+```
+# 每行一个 URL；含 {i} 的行会展开成 1..6（对应 ChromeGo 的 ip_1..ip_6）
+https://gitlab.com/free9999/ipupdate/.../clash.meta2/{i}/config.yaml
+https://www.67867867.xyz/Alvin9999/PAC/.../clash.meta2/{i}/config.yaml
+```
+
+改它有两种方式，效果完全一样：
+
+- 直接编辑文件 → `./up.sh`
+- 面板「节点源」页改 → 点「保存并刷新节点池」
+
+保存时会自动把旧文件备份成 `config/sources.txt.bak`。**文件缺失或一行都没解析出来时，会自动回退到内置默认源**，不会把网关搞挂。
+
+### 面板的安全边界（务必看）
+
+面板能控制容器和整个代理链路，等于服务器上的一把钥匙：
+
+- **不要暴露到公网。** 默认监听 `0.0.0.0:9091`，意思是**局域网 + ZeroTier 都能访问**。
+- **只想让 ZeroTier 访问**：把 `.env` 里 `PANEL_LISTEN` 改成服务器的 ZeroTier IP，再 `docker compose up -d panel`。
+  ```
+  PANEL_LISTEN=10.146.11.235
+  ```
+- **配合防火墙限源**：
+  ```bash
+  sudo ufw allow from <你的网段>/16 to any port 9091 proto tcp
+  ```
+- **它挂了 `/var/run/docker.sock`** —— 这是「一键重启容器」的前提，但**等价于把宿主机 root 权限交给了这个容器**。自用可以接受；如果你介意，把 `docker-compose.yml` 里 panel 的那行 socket 挂载删掉即可 —— 代价是失去重启容器的能力，**其余功能不受影响**。
+  > 注意：**不要**给它加 `:ro`。重启容器是写操作，只读挂载会让「一键重启」直接报错。
+- 面板自身有**密码 + 签名 Cookie**（HttpOnly / SameSite=Strict），写操作还额外要求自定义请求头做 CSRF 防护。
+
+### 邮件告警（面板「运维」页）
+
+面板内置了**邮件告警**：节点全挂 / 容器宕机 / API 失联 / 磁盘快满时，主动给你发邮件。
+
+在面板「运维 → 邮件告警」里：
+
+1. 勾选「启用邮件告警」
+2. 填 SMTP 信息（服务器 / 端口 / 用户名 / 密码 / 发信地址 / 收件人）
+3. 点「发送测试邮件」验证配置
+4. 点「保存设置」
+
+行为：
+
+- 只在**状态变化**时发信（正常→异常发一封「告警」，异常→正常发一封「恢复」）
+- 一直没恢复的话，每 N 小时提醒一次（默认 6 小时）
+- 最核心的检查项是「**所有节点均不可用**」：它会对策略组里每个节点做一次真实测速，一个都不通才发信
+
+> 隐私：SMTP 密码只存在服务器上的 `data/panel/alerts.json`（已 gitignore），前端回显永远是打码的（`__SET__`），也不会写进日志。
+>
+> 常见端口：`465` 走 SSL/TLS（QQ 企业邮箱就是这个）；`587`/`25` 走 STARTTLS。都支持。
+>
+> 也可以在 `.env` 里用 `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `SMTP_FROM_NAME` / `ALERT_TO` / `ALERT_ENABLED` 预填（见 `.env.example`）。
+
+### mihomo 的管理 API
+
+面板要工作，mihomo 必须开管理 API —— `config.base.yaml` 里已经默认加好了：
+
+```yaml
+external-controller: 127.0.0.1:9090
+```
+
+**绑定回环**：只有宿主机本地进程和 host 网络的 panel 容器能访问，**不会暴露到网络**。
+
+想把它开放给别的面板（例如自建一个 zashboard），那必须同时加 `secret`：
+
+```yaml
+external-controller: 0.0.0.0:9090
+secret: "换成你自己的长密码"
+```
+
+然后在 `docker-compose.yml` 的 panel 服务里把 `MIHOMO_SECRET` 设成同一个值（面板会自动带上 `Authorization` 头）。
 
 ## 各端怎么接入
 
@@ -231,7 +356,7 @@ sudo systemctl enable --now mihomo-node-update.timer   # 每天 05:30 / 17:30 �
 systemctl list-timers mihomo-node-update.timer         # 确认已生效
 ```
 
-> 提醒：源里的免费节点随时可能全部失效；若两三个周期后 `journalctl -u mihomo` 显示节点全红，说明需要换一套源（编辑 `merge-sources.sh` 顶部的 URL 列表即可）。
+> 提醒：源里的免费节点随时可能全部失效；若两三个周期后节点全红，说明需要换一套源 —— 编辑 **`config/sources.txt`**（或在管理面板的「节点源」页改），再跑一次 `./up.sh`（或点面板上的「刷新节点池」）。
 
 ## 国内直连分流
 
@@ -252,6 +377,9 @@ geo 数据（`geosite.dat` / `geoip.dat`）由 `bootstrap.sh` 启动时从 jsdel
 
 ## 安全与合规
 
-- 仓库内不要提交 `config.yaml`、`Country.mmdb`、`GeoSite.dat`、`ruleset/`（已在 `.gitignore`）
+- 仓库内不要提交 `config.yaml`、`Country.mmdb`、`GeoSite.dat`、`ruleset/`、`.env`、`data/`（均已在 `.gitignore`）
+- 导出/下载得到的订阅配置文件（形如 `Clash_*.yaml`）含节点凭据，**已被 `.gitignore` 挡住，也不要手动 `git add -f`**
+- 管理面板（9091）能控制容器与整个代理链路：**不要暴露到公网**，建议只在内网 / ZeroTier 使用并配合防火墙限源
+- mihomo 管理 API（9090）默认只绑回环；若要对外监听，务必同时设置 `secret`
 - 给 ZeroTier 网内设备提供出口前，先想清楚信任边界
 - 使用请遵守所在网络环境的管理规定，本项目只负责自有设备之间的流量转发

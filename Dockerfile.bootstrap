@@ -8,6 +8,10 @@ COPY merge-sources.sh /usr/local/bin/merge-sources.sh
 COPY config.base.yaml /app/config.base.yaml
 COPY bootstrap.sh /usr/local/bin/bootstrap.sh
 
+# 节点源列表。运行期会被 compose 用 ./config 覆盖挂载；
+# 这里的 COPY 只是「没挂载时也能跑」的兜底。
+COPY config/sources.txt /app/config/sources.txt
+
 RUN chmod +x /usr/local/bin/merge-sources.sh /usr/local/bin/bootstrap.sh
 
 WORKDIR /work

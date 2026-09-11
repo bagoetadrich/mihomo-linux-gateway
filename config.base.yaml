@@ -24,6 +24,21 @@ bind-address: 0.0.0.0
 mode: rule
 log-level: info
 
+# ============================================================
+# 管理 API(供 panel 使用)
+#
+# 绑定回环 = 只有宿主机本地的进程和 panel 容器(host 网络)能访问,
+# 不会暴露到局域网或公网。
+#
+# ⚠ 如果你要改成对外监听(例如 0.0.0.0:9090 给别的面板用),
+#   必须同时加上 secret, 否则等于把整个代理的控制权敞开:
+#       external-controller: 0.0.0.0:9090
+#       secret: "换成你自己的长密码"
+#   加了 secret 后, 记得在 docker-compose.yml 的 panel 服务里也设置
+#   MIHOMO_SECRET 为同一个值。
+# ============================================================
+external-controller: 127.0.0.1:9090
+
 # 使用 geosite.dat / geoip.dat 格式(与 meta-rules-dat 分发一致)
 geodata-mode: true
 
@@ -32,7 +47,7 @@ dns:
   # 监听 1053, 供云服务器把手机(IKEv2 客户端)的 UDP 53 转发过来。
   # 用高位端口而不是 53: 不和本机 systemd-resolved(127.0.0.53:53) 抢端口。
   listen: 0.0.0.0:1053
-  # 只返回 IPv4。隧道里没有 IPv6 通路, 返回 AAAA 只会让手机白等一轮超时。
+  # 只返回 I                                                                                                                                                                                                                                                                                                                                                                                                                                                                                Pv4。隧道里没有 IPv6 通路, 返回 AAAA 只会让手机白等一轮超时。
   ipv6: false
   nameserver:
     - 223.5.5.5
