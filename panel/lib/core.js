@@ -11,7 +11,7 @@ export const MIHOMO_API = process.env.MIHOMO_API || "http://127.0.0.1:9090";
 export const MIHOMO_SECRET = process.env.MIHOMO_SECRET || "";
 
 // ---------------- Docker Engine API（走 unix socket） ----------------
-export function dockerRequest(method, apiPath, body, timeoutMs = 20000) {
+export function dockerRequest(method, apiPath, body, timeoutMs = 6000) {
 	return new Promise((resolve, reject) => {
 		const payload = body === undefined || body === null ? null : JSON.stringify(body);
 		const headers = {};
@@ -155,7 +155,9 @@ export function dockerLogStream(name, { tail = 200, since = 0 } = {}, onText, on
 }
 
 // ---------------- mihomo external-controller API ----------------
-export async function mihomo(method, apiPath, body, timeoutMs = 15000) {
+// 默认超时压到 4 秒：面板是轮询式的，慢一次就会拖垮整页。
+// 确实需要长耗时的（比如整组测速）由调用方显式传更大的值。
+export async function mihomo(method, apiPath, body, timeoutMs = 4000) {
 	const headers = {};
 	if (MIHOMO_SECRET) headers.Authorization = `Bearer ${MIHOMO_SECRET}`;
 	if (body !== undefined) headers["Content-Type"] = "application/json";

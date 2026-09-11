@@ -120,7 +120,8 @@ const ZT_NETS = (process.env.ZT_NETS || "").split(",").map((s) => s.trim()).filt
 function deviceLabel(ip, names) {
 	if (names[ip]) return names[ip];
 	if (ip === "127.0.0.1" || ip === "::1") return "本机";
-	if (!ip || ip === "unknown") return "未知";
+	// 没有 sourceIP = 内核自己发起的连接（DNS fallback 等），不是任何设备
+	if (!ip || ip === "unknown") return "本机（mihomo 自身）";
 	for (const p of VPN_NETS) if (ip.startsWith(p)) return `VPN 客户端 ${ip}`;
 	for (const p of ZT_NETS) if (ip.startsWith(p)) return `ZeroTier 设备 ${ip}`;
 	if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return `内网 ${ip}`;
@@ -251,20 +252,42 @@ route("POST", /^\/api\/logout$/, async (_req, res) => {
 }, { auth: false });
 
 // —— 概览 ——
+// 容器列表短暂缓存：概览/运维都在轮询，没必要每次都打一次 Docker
+const CTN_TTL = 3000;
+let ctnCache = { at: 0, list: null, error: null };
+async function getContainers() {
+	if (ctnCache.list && Date.now() - ctnCache.at < CTN_TTL) return ctnCache;
+	try {
+		const list = await dockerListContainers();
+		ctnCache = { at: Date.now(), list, error: null };
+	} catch (e) {
+		ctnCache = { at: Date.now(), list: ctnCache.list, error: e.message };
+	}
+	return ctnCache;
+}
+
 route("GET", /^\/api\/overview$/, async (_req, res) => {
 	const out = { ts: Date.now(), system: null, containers: [], mihomo: null, stats: stats.snapshot() };
 	out.system = sysInfo();
-	try {
-		out.containers = await dockerListContainers();
-	} catch (e) {
-		out.containersError = e.message;
-	}
-	try {
-		const [ver, mem] = await Promise.all([mihomo("GET", "/version"), mihomo("GET", "/memory")]);
-		out.mihomo = { version: ver, memory: mem };
-	} catch (e) {
-		out.mihomoError = e.message;
-	}
+	// Docker 与 mihomo 并行：串行会让两边延迟叠加（最坏 6s + 4s）
+	const [ctn, mh] = await Promise.all([
+		getContainers(),
+		(async () => {
+			try {
+				const [version, memory] = await Promise.all([
+					mihomo("GET", "/version", undefined, 4000),
+					mihomo("GET", "/memory", undefined, 4000),
+				]);
+				return { ok: true, data: { version, memory } };
+			} catch (e) {
+				return { ok: false, error: e.message };
+			}
+		})(),
+	]);
+	out.containers = ctn.list || [];
+	if (ctn.error) out.containersError = ctn.error;
+	if (mh.ok) out.mihomo = mh.data;
+	else out.mihomoError = mh.error;
 	sendJson(res, 200, out);
 });
 

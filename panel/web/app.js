@@ -48,6 +48,10 @@
 		return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 	}
 
+	// 没有源 IP / 源端口的连接是 mihomo 自身发起的（如 DNS fallback），显示成占位符
+	const showIP = (ip) => (!ip || ip === "unknown" ? "—" : ip);
+	const showPort = (p) => (p ? `:${p}` : "");
+
 	function toast(msg, kind = "") {
 		const el = $("#toast");
 		el.className = `toast ${kind}`;
@@ -162,6 +166,9 @@
 	let currentView = "";
 	let currentCleanup = null;
 	let pollTimer = null;
+	// 视图代号：每次切页 +1。异步请求回来时如果代号变了，说明页面已经换过，
+	// 必须丢弃结果，否则会去操作已经不存在的 DOM（报 classList of null）。
+	let viewGen = 0;
 
 	function navigate(hash) {
 		const raw = String(hash || "").replace(/^#/, "");
@@ -177,6 +184,7 @@
 			clearInterval(pollTimer);
 			pollTimer = null;
 		}
+		viewGen++;
 		currentView = view;
 		$("#viewTitle").textContent = TITLES[view];
 		$$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
@@ -231,20 +239,30 @@
 		`;
 
 		if (lastTraffic) paintTraffic(lastTraffic);
+		let busy = false;
 		const load = async () => {
+			if (busy) return; // 上一次还没回来，跳过，避免请求堆积
+			busy = true;
+			const gen = viewGen;
 			try {
 				const d = await api("/api/overview");
+				if (gen !== viewGen) return; // 已经切到别的页面，丢弃结果
 				paintSystem(d.system);
 				paintMihomo(d.mihomo, d.mihomoError);
 				paintContainers(d.containers, d.containersError);
-				$("#sideStatus").textContent = `正常 · ${d.system?.hostname || ""}`;
+				const st = $("#sideStatus");
+				if (st) st.textContent = `正常 · ${d.system?.hostname || ""}`;
 			} catch (e) {
+				if (gen !== viewGen) return;
 				toast(`读取概览失败: ${e.message}`, "err");
-				$("#sideStatus").textContent = "读取失败";
+				const st = $("#sideStatus");
+				if (st) st.textContent = "读取失败";
+			} finally {
+				busy = false;
 			}
 		};
 		load();
-		pollTimer = setInterval(load, 5000);
+		pollTimer = setInterval(load, 6000);
 	}
 
 	function paintTraffic(d) {
@@ -262,6 +280,7 @@
 	function paintSystem(s) {
 		if (!s) return;
 		const box = $("#sysBox");
+		if (!box) return; // 页面已切换，DOM 不在了
 		const mem = s.mem;
 		const disk = s.disk;
 		const cpu = s.cpuPercent;
@@ -296,6 +315,7 @@
 
 	function paintMihomo(m, err) {
 		const box = $("#mihomoBox");
+		if (!box) return; // 页面已切换，DOM 不在了
 		box.classList.remove("muted", "small");
 		if (err) {
 			box.innerHTML = `<span class="badge bad">未连上</span><div style="margin-top:8px">${esc(err)}</div>
@@ -315,7 +335,9 @@
 
 	function paintContainers(list, err) {
 		const tb = $("#ctnTable tbody");
-		$("#ctnHint").textContent = err ? `（${err}）` : `共 ${list?.length || 0} 个`;
+		const hint = $("#ctnHint");
+		if (!tb || !hint) return; // 页面已切换
+		hint.textContent = err ? `（${err}）` : `共 ${list?.length || 0} 个`;
 		if (!list || !list.length) {
 			tb.innerHTML = `<tr><td colspan="4" class="empty">${esc(err || "没有容器")}</td></tr>`;
 			return;
@@ -406,16 +428,25 @@
 				</table></div>
 			</div>
 		`;
+		let busy = false;
 		const load = async () => {
+			if (busy) return;
+			busy = true;
+			const gen = viewGen;
 			try {
 				const d = await api("/api/connections");
-				$("#connHint").textContent = `共 ${d.count} 条`;
-				$("#devTable tbody").innerHTML = (d.devices || []).length
+				if (gen !== viewGen) return; // 已切页，丢弃
+				const hint = $("#connHint");
+				const devTb = $("#devTable tbody");
+				const connTb = $("#connTable tbody");
+				if (!hint || !devTb || !connTb) return;
+				hint.textContent = `共 ${d.count} 条`;
+				devTb.innerHTML = (d.devices || []).length
 					? d.devices
 							.map(
 								(x) => `<tr>
 						<td>${esc(x.label)}</td>
-						<td class="mono">${esc(x.ip)}</td>
+						<td class="mono">${esc(showIP(x.ip))}</td>
 						<td class="mono">${x.connections}</td>
 						<td class="mono" style="color:var(--up)">${fmtBytes(x.upload)}</td>
 						<td class="mono" style="color:var(--down)">${fmtBytes(x.download)}</td>
@@ -425,12 +456,12 @@
 							.join("")
 					: `<tr><td colspan="6" class="empty">当前没有活动连接</td></tr>`;
 
-				$("#connTable tbody").innerHTML = (d.connections || []).length
+				connTb.innerHTML = (d.connections || []).length
 					? d.connections
 							.slice(0, 300)
 							.map(
 								(c) => `<tr>
-						<td class="mono small">${esc(c.sourceLabel)}<br><span class="muted">:${esc(c.sourcePort)}</span></td>
+						<td class="mono small">${esc(c.sourceLabel)}<br><span class="muted">${showPort(c.sourcePort)}</span></td>
 						<td class="mono small">${esc(c.host || c.destinationIP)}<br><span class="muted">:${esc(c.destinationPort)}</span></td>
 						<td class="small">${esc(c.rule)}${c.rulePayload ? `<br><span class="muted mono">${esc(c.rulePayload)}</span>` : ""}</td>
 						<td>${(c.chains || []).map((x) => `<span class="badge">${esc(x)}</span>`).join(" ")}</td>
@@ -442,11 +473,14 @@
 							.join("")
 					: `<tr><td colspan="7" class="empty">当前没有活动连接</td></tr>`;
 			} catch (e) {
+				if (gen !== viewGen) return;
 				toast(`读取连接失败: ${e.message}`, "err");
+			} finally {
+				busy = false;
 			}
 		};
 		load();
-		pollTimer = setInterval(load, 3000);
+		pollTimer = setInterval(load, 4000);
 	}
 
 	// ============================================================
@@ -474,15 +508,24 @@
 				</table></div>
 			</div>
 		`;
+		let busy = false;
 		const load = async () => {
+			if (busy) return;
+			busy = true;
+			const gen = viewGen;
 			try {
 				const d = await api("/api/proxies");
+				if (gen !== viewGen) return; // 已切页，丢弃
 				proxiesCache = d.proxies || {};
 				paintGroups(proxiesCache);
 				paintNodes(proxiesCache);
 			} catch (e) {
+				if (gen !== viewGen) return;
 				toast(`读取节点失败: ${e.message}`, "err");
-				$("#groups").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+				const g = $("#groups");
+				if (g) g.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+			} finally {
+				busy = false;
 			}
 		};
 		load();
@@ -492,12 +535,14 @@
 	}
 
 	function paintGroups(all) {
+		const host = $("#groups");
+		if (!host) return; // 页面已切换
 		const groups = Object.entries(all).filter(([, p]) => GROUP_TYPES.has(p.type));
 		if (!groups.length) {
-			$("#groups").innerHTML = `<div class="empty">没有策略组</div>`;
+			host.innerHTML = `<div class="empty">没有策略组</div>`;
 			return;
 		}
-		$("#groups").innerHTML = groups
+		host.innerHTML = groups
 			.map(([name, g]) => {
 				const canSelect = g.type === "Selector";
 				const opts = (g.all || [])
@@ -516,7 +561,7 @@
 			})
 			.join("");
 
-		$$("#groups select").forEach((sel) => {
+		$$("select", host).forEach((sel) => {
 			sel.onchange = async () => {
 				const group = sel.dataset.group;
 				const name = sel.value;
@@ -541,13 +586,16 @@
 	}
 
 	function paintNodes(all) {
+		const hint = $("#nodeHint");
+		const tb = $("#nodeTable tbody");
+		if (!hint || !tb) return; // 页面已切换
 		const nodes = Object.entries(all).filter(([, p]) => !GROUP_TYPES.has(p.type));
-		$("#nodeHint").textContent = `共 ${nodes.length} 个`;
+		hint.textContent = `共 ${nodes.length} 个`;
 		if (!nodes.length) {
-			$("#nodeTable tbody").innerHTML = `<tr><td colspan="4" class="empty">没有节点</td></tr>`;
+			tb.innerHTML = `<tr><td colspan="4" class="empty">没有节点</td></tr>`;
 			return;
 		}
-		$("#nodeTable tbody").innerHTML = nodes
+		tb.innerHTML = nodes
 			.map(([name, p]) => {
 				const d = lastDelay(p);
 				return `<tr data-node="${esc(name)}">
@@ -873,12 +921,20 @@
 			</div>
 		`;
 		const out = $("#opsOut");
+		let busy = false;
 		const load = async () => {
+			if (busy) return;
+			busy = true;
+			const gen = viewGen;
 			try {
 				const d = await api("/api/overview");
+				if (gen !== viewGen) return; // 已切页，丢弃
 				paintOpsContainers(d.containers);
 			} catch (e) {
+				if (gen !== viewGen) return;
 				toast(`读取容器失败: ${e.message}`, "err");
+			} finally {
+				busy = false;
 			}
 		};
 		load();
@@ -908,6 +964,7 @@
 
 	function paintOpsContainers(list) {
 		const tb = $("#opsCtn tbody");
+		if (!tb) return; // 页面已切换
 		if (!list || !list.length) {
 			tb.innerHTML = `<tr><td colspan="4" class="empty">没有容器</td></tr>`;
 			return;

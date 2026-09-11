@@ -68,7 +68,7 @@ async function tick() {
 	if (running) return;
 	running = true;
 	try {
-		const data = await mihomo("GET", "/connections");
+		const data = await mihomo("GET", "/connections", undefined, 3000);
 		const conns = Array.isArray(data?.connections) ? data.connections : [];
 		const now = Date.now();
 		const dt = lastTick ? Math.max(0.001, (now - lastTick) / 1000) : 0;
