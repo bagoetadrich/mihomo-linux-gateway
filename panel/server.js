@@ -248,19 +248,54 @@ async function getContainers() {
 	return ctnCache;
 }
 
+// ---------------- 内核内存：改从 Docker 容器统计拿 ----------------
+// ⚠ 为什么不用 mihomo 的 `GET /memory`：
+//   它是个**流式**接口 —— 会一直往下推样本（每秒一个 {"inuse":…}），连接**永不结束**。
+//   实测：curl 抓了 60 秒仍在输出，只能被 max-time 掐断。
+//   而面板用的是 fetch + await r.text()，会一直等到流结束 —— 于是**必然等到超时**。
+//   这正是概览页那张「mihomo 内核」卡片常年显示下面这句的根因：
+//       未连上 / The operation was aborted due to timeout
+//   让人误以为内核没起来；其实 /version、/connections、/proxies 全都正常（1~2 ms），
+//   所以"设备"页一直有数据。
+//
+// 现在改从 Docker 的容器统计读（一次性返回），并做 15 秒缓存 —— 不阻塞概览。
+const MEM_TTL_MS = 15_000;
+let memCache = { at: 0, bytes: null, inflight: false };
+
+function getKernelMemory() {
+	if (Date.now() - memCache.at < MEM_TTL_MS) return memCache.bytes;
+	if (!memCache.inflight) {
+		memCache.inflight = true;
+		// stream=false：只要一个采样点就返回（约 1 秒），不会像 /memory 那样吊着
+		dockerRequest(
+			"GET",
+			`/containers/${encodeURIComponent(MIHOMO_CONTAINER)}/stats?stream=false`,
+			undefined,
+			8000,
+		)
+			.then((s) => {
+				const bytes = Number(s?.memory_stats?.usage);
+				memCache = { at: Date.now(), bytes: bytes > 0 ? bytes : null, inflight: false };
+			})
+			.catch(() => {
+				memCache = { at: Date.now(), bytes: null, inflight: false };
+			});
+	}
+	return memCache.bytes;
+}
+
 route("GET", /^\/api\/overview$/, async (_req, res) => {
 	const out = { ts: Date.now(), system: null, containers: [], mihomo: null, stats: stats.snapshot() };
 	out.system = sysInfo();
-	// Docker 与 mihomo 并行：串行会让两边延迟叠加（最坏 6s + 4s）
+	// Docker 与 mihomo 并行：串行会让两边延迟叠加
 	const [ctn, mh] = await Promise.all([
 		getContainers(),
 		(async () => {
 			try {
-				const [version, memory] = await Promise.all([
-					mihomo("GET", "/version", undefined, 4000),
-					mihomo("GET", "/memory", undefined, 4000),
-				]);
-				return { ok: true, data: { version, memory } };
+				// 只等 /version（1~2ms）。内存走上面的 Docker 统计缓存，绝不阻塞这里。
+				const version = await mihomo("GET", "/version", undefined, 4000);
+				const bytes = getKernelMemory();
+				return { ok: true, data: { version, memory: bytes ? { inuse: bytes } : null } };
 			} catch (e) {
 				return { ok: false, error: e.message };
 			}

@@ -378,6 +378,8 @@ tun:
 | 开了代理反而内网连不上 | 缺 `no_proxy` | Linux 侧补 `no_proxy` |
 | `ping` 不通但 `curl` 正常 | ICMP 不在代理范围 | 正常现象 |
 | 公网扫到 7890 | 没限源 | `ufw` 只放行 ZeroTier 网段 |
+| 概览页「mihomo 内核」显示**未连上 / The operation was aborted due to timeout**，但「设备」页有数据 | 旧版面板去读 mihomo 的 `/memory`，而那是**流式接口**（一直推样本、永不结束），`fetch` 必然等到超时 | 已修复：内核内存改从 **Docker 容器统计**读。若仍出现，检查 `config.base.yaml` 里的 `external-controller` 是否开启 |
+| 某些境外域名（`www.gstatic.com`、`fonts.googleapis.com`…）打不开，报 `SSL_ERROR_SYSCALL` | 这些域名不在「强制走代理」名单里，只能落到 `GEOIP,CN` 用 IP 判断；国内 DNS 返回污染 IP → 被判成"国内"走 DIRECT | 已修复：规则里加了 `GEOSITE,geolocation-!cn,🚀 节点选择`，境外域名**按域名**分流，不依赖 DNS |
 
 ## 进阶：多源自动切换（免费漂移节点的自愈）
 
