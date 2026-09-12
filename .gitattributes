@@ -1,0 +1,40 @@
+# ============================================================
+# 换行符统一 —— 这个项目要跨 Windows（编辑）和 Linux（部署），
+# 不统一会出真事：
+#   * shell 脚本变成 CRLF 后，Linux 上会报
+#       /usr/bin/env bash^M: bad interpreter
+#       $'\r': command not found
+#   * Dockerfile 同理
+#   * 而 shell 脚本在本机 Git Bash 里 `.`source 也可能出错
+#
+# 所以把「必须在 Linux 上跑」的文件强制成 LF —— 仓库里、工作区里都是 LF，
+# 不受 core.autocrlf 影响（Windows 上 autocrlf=true 时，
+# checkout 会把文本文件变成 CRLF，正是这个隐患的来源）。
+# ============================================================
+
+* text=auto
+
+# 必须在 Linux 上执行 / 解析的
+*.sh          text eol=lf
+Dockerfile*   text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+
+# 代码与文档
+*.js          text eol=lf
+*.mjs         text eol=lf
+*.json        text eol=lf
+*.md          text eol=lf
+*.html        text eol=lf
+*.css         text eol=lf
+
+# 二进制 / 数据文件：不做任何换行转换
+*.gz          binary
+*.bin         binary
+*.dat         binary
+*.mmdb        binary
+*.png         binary
+*.jpg         binary
+*.ico         binary
+*.woff        binary
+*.woff2       binary
