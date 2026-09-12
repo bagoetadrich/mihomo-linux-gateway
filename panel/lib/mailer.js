@@ -147,6 +147,9 @@ export async function sendMail(o) {
 			const r = await read();
 			expect(r, [220], "STARTTLS");
 			const plain = sock;
+			// 升级 TLS 前摘掉明文层的数据监听器：TLS 会复用同一个底层 socket，
+			// 旧监听器留着会让原始密文同时喂给已经作废的旧 reader（重复消费）。
+			plain.removeAllListeners("data");
 			sock = tls.connect({ socket: plain, servername: host, timeout: timeoutMs });
 			read = attachReader(sock, timeoutMs);
 			await new Promise((resolve, reject) => {

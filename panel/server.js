@@ -16,7 +16,6 @@ import { fileURLToPath } from "node:url";
 
 import {
 	MIHOMO_API,
-	dockerInspect,
 	dockerListContainers,
 	dockerLogStream,
 	dockerRequest,
@@ -25,6 +24,8 @@ import {
 	mihomo,
 	sysInfo,
 } from "./lib/core.js";
+import { refreshNodes } from "./lib/refresh.js";
+import * as scheduler from "./lib/scheduler.js";
 import * as stats from "./lib/stats.js";
 import * as alerts from "./lib/alerts.js";
 import {
@@ -41,6 +42,8 @@ import {
 const LISTEN = process.env.PANEL_LISTEN || "0.0.0.0";
 const PORT = Number(process.env.PANEL_PORT || 9091);
 const REPO_DIR = process.env.REPO_DIR || "/repo";
+// 面板运行数据目录（密码文件、流量统计、告警配置都落在这里；compose 里由 PANEL_DATA 指定）
+const DATA_DIR = process.env.PANEL_DATA || "/data";
 const SOURCES_FILE = process.env.SOURCES_FILE || path.join(REPO_DIR, "config", "sources.txt");
 const DEVICES_FILE = process.env.DEVICES_FILE || path.join(REPO_DIR, "config", "devices.json");
 const MIHOMO_CONTAINER = process.env.MIHOMO_CONTAINER || "mihomo";
@@ -199,27 +202,6 @@ async function restartContainer(name) {
 	return `已启动 ${name}`;
 }
 
-async function waitContainerExit(name, timeoutMs, onTick) {
-	const t0 = Date.now();
-	let last = "";
-	while (Date.now() - t0 < timeoutMs) {
-		try {
-			const info = await dockerInspect(name);
-			const st = info?.State || {};
-			last = `${st.Status || "?"} (exit=${st.ExitCode ?? "-"})`;
-			onTick?.(last);
-			if (st.Status === "exited") return { ok: st.ExitCode === 0, status: last };
-			if (st.Status === "created" || st.Status === "dead") {
-				return { ok: false, status: last };
-			}
-		} catch (e) {
-			last = e.message;
-		}
-		await sleep(1200);
-	}
-	return { ok: false, status: `等待超时（最后状态: ${last}）` };
-}
-
 // ---------------- 路由 ----------------
 const routes = [];
 const route = (method, pattern, handler, opts = {}) =>
@@ -332,14 +314,15 @@ route("GET", /^\/api\/proxies\/delay$/, async (req, res) => {
 	const u = new URL(req.url, "http://x");
 	const name = u.searchParams.get("name");
 	if (!name) return sendJson(res, 400, { error: "缺少 name" });
-	const timeout = u.searchParams.get("timeout") || "5000";
+	// 夹到 1s~60s：防止 timeout=abc 得到 NaN，把 AbortSignal.timeout(NaN) 传下去
+	const timeout = Math.min(60000, Math.max(1000, Number(u.searchParams.get("timeout")) || 5000));
 	const url = u.searchParams.get("url") || "https://www.gstatic.com/generate_204";
 	try {
 		const data = await mihomo(
 			"GET",
-			`/proxies/${encodeURIComponent(name)}/delay?timeout=${encodeURIComponent(timeout)}&url=${encodeURIComponent(url)}`,
+			`/proxies/${encodeURIComponent(name)}/delay?timeout=${encodeURIComponent(String(timeout))}&url=${encodeURIComponent(url)}`,
 			undefined,
-			Number(timeout) + 4000,
+			timeout + 4000,
 		);
 		sendJson(res, 200, { ok: true, ...data });
 	} catch (e) {
@@ -462,6 +445,7 @@ route(
 
 // —— 运维动作（SSE 带进度） ——
 route("GET", /^\/api\/actions\/restart\/stream$/, async (req, res) => {
+	if (!sameOrigin(req)) return sendJson(res, 403, { error: "跨站请求被拒绝" });
 	const u = new URL(req.url, "http://x");
 	const target = u.searchParams.get("target") || MIHOMO_CONTAINER;
 	sseOpen(res);
@@ -476,22 +460,18 @@ route("GET", /^\/api\/actions\/restart\/stream$/, async (req, res) => {
 });
 
 route("GET", /^\/api\/actions\/refresh\/stream$/, async (req, res) => {
+	if (!sameOrigin(req)) return sendJson(res, 403, { error: "跨站请求被拒绝" });
 	sseOpen(res);
 	try {
-		sseSend(res, { type: "step", message: `启动节点池生成容器 ${BOOTSTRAP_CONTAINER} ...` });
-		await restartContainer(BOOTSTRAP_CONTAINER);
-
-		sseSend(res, { type: "step", message: "等待拉取源并生成配置（最长 3 分钟）..." });
-		const r = await waitContainerExit(BOOTSTRAP_CONTAINER, 180000, (st) =>
-			sseSend(res, { type: "status", message: `bootstrap 状态: ${st}` }),
-		);
+		// 「抓源 + 热重载」只在 refresh.js 里实现一次，
+		// 和「节点全挂自动救援」「面板定时刷新」共用同一份逻辑（含并发锁）。
+		const r = await refreshNodes((m) => sseSend(res, { type: "step", message: m }));
+		scheduler.recordManual(r);
 		sseSend(res, {
-			type: "step",
-			message: r.ok ? "配置生成完成，正在重载 mihomo ..." : `bootstrap 结束（${r.status}），仍尝试重载 mihomo`,
+			type: "done",
+			ok: r.ok,
+			message: r.ok ? `节点池已刷新，mihomo 已${r.how}` : `刷新失败：${r.error}`,
 		});
-
-		await restartContainer(MIHOMO_CONTAINER);
-		sseSend(res, { type: "done", ok: r.ok, message: r.ok ? "节点池已刷新，mihomo 已重载" : `配置可能未更新（${r.status}），已重载 mihomo` });
 	} catch (e) {
 		sseSend(res, { type: "done", ok: false, message: e.message });
 	}
@@ -514,6 +494,21 @@ route(
 			return sendJson(res, 400, { error: "op 只能是 restart/start/stop" });
 		}
 		sendJson(res, 200, { ok: true });
+	},
+	{ write: true },
+);
+
+// —— 定时刷新节点池（面板内置，替代宿主机 cron） ——
+route("GET", /^\/api\/refresh$/, async (_req, res) => {
+	sendJson(res, 200, { config: scheduler.getConfig(), state: scheduler.getState() });
+});
+
+route(
+	"POST",
+	/^\/api\/refresh\/config$/,
+	async (req, res) => {
+		const patch = await readBody(req);
+		sendJson(res, 200, { ok: true, config: scheduler.saveConfig(patch) });
 	},
 	{ write: true },
 );
@@ -566,7 +561,16 @@ route(
 
 // ---------------- 静态文件 ----------------
 function serveStatic(req, res, urlPath) {
-	let rel = decodeURIComponent(urlPath.split("?")[0]);
+	// decodeURIComponent 对畸形百分号序列（例如 "/%"、"/%C0%"）会抛 URIError。
+	// 本函数在 createServer 的 async 回调里被调用，异常会变成**未处理的 Promise
+	// rejection** —— Node 默认直接结束进程。也就是说随便一个 URL 就能把面板打挂。
+	let rel;
+	try {
+		rel = decodeURIComponent(urlPath.split("?")[0]);
+	} catch {
+		res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+		return res.end("bad request");
+	}
 	if (rel === "/" || rel === "") rel = "/index.html";
 	const full = path.join(WEB_DIR, rel);
 	// 防目录穿越
@@ -589,12 +593,41 @@ function serveStatic(req, res, urlPath) {
 	});
 }
 
+/**
+ * 同源校验 —— 给「用 EventSource 的写操作」补上 CSRF 防护。
+ *
+ * 背景：EventSource 不能自定义请求头，所以后端的 actions stream 这两个会
+ * 改状态的接口没法走 X-Panel 头校验，成了唯一绕过统一 CSRF 防护的写路径。
+ * SameSite=Strict 的 Cookie 已经挡住浏览器跨站携带，这里再加一道：浏览器发出
+ * 的跨站 EventSource 一定带 Origin，对不上就拒绝。
+ * （非浏览器客户端一般不带 Origin，保持放行，不影响脚本调用。）
+ */
+function sameOrigin(req) {
+	const origin = req.headers.origin;
+	if (!origin) return true;
+	try {
+		return new URL(origin).host === req.headers.host;
+	} catch {
+		return false;
+	}
+}
+
 // ---------------- 主分发 ----------------
 const server = http.createServer(async (req, res) => {
 	const urlPath = (req.url || "/").split("?")[0];
 
 	if (!urlPath.startsWith("/api/")) {
-		return serveStatic(req, res, req.url || "/");
+		// 静态分支里任何同步异常都不该让进程退出（见 serveStatic 的说明）
+		try {
+			return serveStatic(req, res, req.url || "/");
+		} catch (e) {
+			console.error(`[static] ${req.url} -> ${e.message}`);
+			try {
+				res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+				res.end("internal error");
+			} catch {}
+			return;
+		}
 	}
 
 	for (const r of routes) {
@@ -632,6 +665,7 @@ const server = http.createServer(async (req, res) => {
 const authInfo = initAuth();
 stats.start();
 alerts.start();
+scheduler.start();
 
 server.listen(PORT, LISTEN, () => {
 	const line = "=".repeat(58);
@@ -646,21 +680,31 @@ server.listen(PORT, LISTEN, () => {
 		console.log(" 登录密码    : 来自环境变量 PANEL_PASSWORD（见项目根目录 .env）");
 	} else if (authInfo.generated) {
 		console.log(` 登录密码    : (本次自动生成) ${getPassword()}`);
-		console.log("               ^ 已写入 ${PANEL_DATA}/panel-password.txt，建议设 .env 固定下来");
+		console.log(`               ^ 已写入 ${DATA_DIR}/panel-password.txt，建议设 .env 固定下来`);
 	} else {
-		console.log(" 登录密码    : 沿用 /data/panel-password.txt 中保存的密码");
+		console.log(` 登录密码    : 沿用 ${DATA_DIR}/panel-password.txt 中保存的密码`);
 	}
 	console.log(line);
 	console.log(" ⚠ 面板能控制整个代理与容器，请勿暴露到公网，仅在内网/ZeroTier 使用。");
 	console.log(line);
 });
 
+// 兜底：任何漏网的 Promise rejection 都只记日志，不结束进程。
+// 面板是常驻服务，不该因为一个畸形请求就整个挂掉。
+process.on("unhandledRejection", (e) => {
+	console.error(`[panel] 未处理的 Promise rejection: ${e?.message || e}`);
+});
+
 process.on("SIGTERM", () => {
 	stats.stop();
+	alerts.stop();
+	scheduler.stop();
 	server.close(() => process.exit(0));
 	setTimeout(() => process.exit(0), 3000).unref();
 });
 process.on("SIGINT", () => {
 	stats.stop();
+	alerts.stop();
+	scheduler.stop();
 	process.exit(0);
 });

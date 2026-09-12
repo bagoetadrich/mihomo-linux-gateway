@@ -143,7 +143,11 @@ export function reset() {
 	state.day = { date: dayKey(), up: 0, down: 0 };
 	state.month = { key: monthKey(), up: 0, down: 0 };
 	samples = [];
-	lastConns.clear();
+	// 注意：这里**不能**清空 lastConns。
+	// 清空之后，下一次 tick 里所有在途连接都会因为 prev 为空、被当成"新连接"，
+	// 把它们的累计字节整笔加进新统计 —— 表现就是"清零后立刻暴涨一笔"。
+	// 保留 lastConns 当基线、只把 lastTick 归零（本次速率为 0），增量才算得对。
+	lastTick = 0;
 	save();
 }
 

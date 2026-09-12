@@ -1,21 +1,43 @@
 #!/usr/bin/env bash
 # =============================================================
-# up.sh —— 服务器端一键部署/启动(纯 Docker 自举)
+# up.sh —— 服务器端唯一入口(部署 + 刷新节点池)
 #
-#   ./up.sh
+#   ./up.sh             部署/更新: 建镜像 → 抓源生成节点池 → 启动 → 热重载
+#   ./up.sh --refresh   只刷新节点池 + 热重载(定时任务用; 不建镜像、不动容器)
+#
+# 为什么只需要记一个脚本:
+#   ./up.sh           = 首次部署；改完代码 / config.base.yaml 之后再跑一次
+#   ./up.sh --refresh = 日常和定时刷新节点池，**设备不会断线**
+#
+# 部署模式:
 #    0) 首次运行生成 .env(面板密码等)，之后复用
-#    1) 构建 bootstrap 镜像(之后走缓存)
+#    1) 构建 bootstrap / panel 镜像(之后走缓存)
 #    2) 跑一次 bootstrap: 按 config/sources.txt 抓源生成 ./data/config.yaml
 #       (若本次拉源失败但已有 config, 沿用旧配置, 不影响代理)
-#    3) 构建 panel 镜像并启动 mihomo + panel
+#    3) docker compose up -d 启动 mihomo + panel, 再热重载 mihomo
 #
-# 之后刷新节点池(可选, 与 systemd timer / 面板上的按钮效果相同):
-#   docker compose run --rm bootstrap
+# 定时刷新(推荐):
+#   0 */6 * * * cd /opt/mihomo-gateway && ./up.sh --refresh >> /var/log/mihomo-node-refresh.log 2>&1
 #
 # 管理面板: http://<服务器IP>:9091   (密码见 .env 的 PANEL_PASSWORD)
 # =============================================================
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# ---------------- 参数 ----------------
+REFRESH_ONLY=0
+case "${1:-}" in
+--refresh | -r | refresh) REFRESH_ONLY=1 ;;
+"") ;;
+-h | --help)
+	sed -n '2,23p' "$0"
+	exit 0
+	;;
+*)
+	echo "[up] 未知参数: $1  (可用: --refresh)" >&2
+	exit 2
+	;;
+esac
 
 mkdir -p data data/panel
 
@@ -42,6 +64,28 @@ set -a
 . "./$ENV_FILE"
 set +a
 
+# ---------------- 刷新模式(定时任务用) ----------------
+# 只做两件事: 抓源生成配置 + 让 mihomo 重新读一次。
+# 不建镜像、不 docker compose up -d、不重启容器 —— 设备不会断线。
+if [ "$REFRESH_ONLY" = "1" ]; then
+	echo "[up] $(date '+%F %T') 刷新节点池 ..."
+	if docker compose run --rm bootstrap; then
+		echo "[up] 配置已更新"
+	else
+		echo "[up] 警告: bootstrap 未成功(源全挂或网络问题), 沿用现有配置" >&2
+	fi
+
+	if curl -fsS -m 15 -X PUT "http://127.0.0.1:9090/configs?force=true" \
+		-H 'Content-Type: application/json' -d '{"path":""}' >/dev/null 2>&1; then
+		echo "[up] mihomo 已热重载新配置 (容器未重启, 设备未断线)"
+		exit 0
+	fi
+
+	echo "[up] 热重载接口不可用, 回退为重启 mihomo(会有短暂断档) ..." >&2
+	docker compose restart mihomo
+	exit 0
+fi
+
 # ---------------- 1. 构建镜像 ----------------
 # 每次构建 bootstrap/panel(bootstrap.sh / config.base.yaml / panel 源码更新
 # 必须重打包)；层有缓存, 源码没变时很快。
@@ -59,9 +103,24 @@ fi
 
 # ---------------- 3. 启动 ----------------
 echo "[up] 启动/更新 mihomo + panel ..."
-docker compose up -d
-# config 刚被 bootstrap 更新过, 重启一次让 mihomo 加载新配置(短暂闪断可接受)
-docker compose restart mihomo
+# 注意：compose 里 mihomo 依赖 bootstrap「成功完成」，所以若本次抓源失败，
+# up -d 会返回非 0、并拒绝启动 mihomo。这里不让它中断整个脚本 ——
+# 现有容器还在跑，后面照样会拿当前配置做热重载。
+if ! docker compose up -d; then
+	echo "[up] 警告: docker compose up -d 未完全成功（常见原因: 本次 bootstrap 没抓到源）。" >&2
+	echo "[up] 现有容器仍在运行，继续用当前配置尝试热重载。" >&2
+fi
+
+# config 刚被 bootstrap 更新过, 让 mihomo 重新读一次。
+# 优先「热重载」(PUT /configs, 不重启进程/容器, 不断连接);
+# 只有接口不可用时才回退为重启容器(首次部署、或 mihomo 还没起来时属于这种情况)。
+if curl -fsS -m 15 -X PUT "http://127.0.0.1:9090/configs?force=true" \
+	-H 'Content-Type: application/json' -d '{"path":""}' >/dev/null 2>&1; then
+	echo "[up] mihomo 已热重载新配置 (容器未重启, 无断档)"
+else
+	echo "[up] 热重载不可用, 回退为重启 mihomo"
+	docker compose restart mihomo
+fi
 docker compose ps
 
 # ---------------- 4. 提示 ----------------

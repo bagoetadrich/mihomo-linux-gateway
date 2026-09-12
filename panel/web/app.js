@@ -819,6 +819,41 @@
 	// ============================================================
 	// 视图：运维
 	// ============================================================
+	function fmtTime(ts) {
+		try {
+			return new Date(ts).toLocaleString("zh-CN", { hour12: false });
+		} catch {
+			return "—";
+		}
+	}
+
+	async function loadScheduler() {
+		try {
+			paintScheduler(await api("/api/refresh"));
+		} catch (e) {
+			const h = $("#srHint");
+			if (h) h.textContent = "读取失败";
+		}
+	}
+
+	function paintScheduler(d) {
+		const c = (d && d.config) || {};
+		const en = $("#srEnabled");
+		if (en && c.enabled !== undefined) {
+			en.checked = !!c.enabled;
+			$("#srHours").value = c.intervalHours || 6;
+		}
+		const st = (d && d.state) || {};
+		const nx = $("#srNext");
+		if (nx) nx.textContent = st.nextRunAt ? fmtTime(st.nextRunAt) : "未启用";
+		const h = $("#srHint");
+		if (!h) return;
+		const lr = st.lastResult;
+		h.textContent = lr
+			? `上次 ${fmtTime(lr.at)} ${lr.ok ? "成功" : "失败"}${lr.reason ? `（${lr.reason}）` : ""}`
+			: "尚未执行过";
+	}
+
 	function viewOps() {
 		const v = $("#view");
 		v.innerHTML = `
@@ -831,7 +866,7 @@
 						<button id="opStatsReset" class="ghost">流量统计清零</button>
 					</div>
 					<p class="small muted" style="margin-bottom:0">
-						「刷新节点池」= 重新执行 bootstrap（按 config/sources.txt 抓源生成配置）→ 重载 mihomo。约 10 秒~1 分钟。
+						「刷新节点池」= 重新执行 bootstrap（按 config/sources.txt 抓源生成配置）→ 热重载 mihomo（不重启容器、设备不断线）。约 10 秒~1 分钟。
 					</p>
 				</div>
 				<div class="card">
@@ -841,6 +876,23 @@
 						建议只在局域网 / ZeroTier 内访问，并用防火墙限制来源。
 					</p>
 				</div>
+			</div>
+			<div class="card">
+				<h3>定时刷新节点池 <span class="sub" id="srHint">读取中...</span></h3>
+				<div class="row" style="margin-bottom:10px">
+					<label class="remember" style="justify-content:flex-start;margin:0">
+						<input type="checkbox" id="srEnabled" /> 启用
+					</label>
+					<span class="small muted" style="margin-left:14px">每</span>
+					<input id="srHours" type="number" min="1" max="168" style="width:74px" value="6" />
+					<span class="small muted">小时自动抓一次源</span>
+					<span class="spacer"></span>
+					<button id="srSave" class="small">保存</button>
+				</div>
+				<p class="small muted" style="margin:0">
+					由面板自己定时执行「抓源 → 热重载」，<b>不需要在宿主机配 cron / systemd timer</b>，设备不会断线。<br />
+					下次执行：<span id="srNext" class="mono">—</span>
+				</p>
 			</div>
 			<div class="card">
 				<h3>邮件告警 <span class="sub" id="alertHint">读取中...</span></h3>
@@ -889,10 +941,13 @@
 					<label class="remember"><input type="checkbox" id="alR_ctn" /> 容器未在运行</label>
 					<label class="remember"><input type="checkbox" id="alR_disk" /> 磁盘超过
 						<input id="alDisk" type="number" style="width:62px;padding:3px 6px" value="90" />%</label>
+					<label class="remember"><input type="checkbox" id="alR_heal" /> 节点全挂时自动重抓源（自救）</label>
 				</div>
 				<p class="small muted" style="margin:10px 0 0">
 					「所有节点均不可用」= 对策略组里每个节点做一次真实测速，一个都不通就发信。
-					这就是你最初想要的那个「全挂了主动告诉你」。
+					这就是你最初想要的那个「全挂了主动告诉你」。<br />
+					勾上「自动重抓源」后，一旦检测到全挂，面板会<b>自动重新抓一次源并热重载</b>（10 分钟冷却），
+					救援过程与结果会写进告警邮件。<b>注意：它只能重拉你已配置的那些源，变不出源里本来就没有的节点。</b>
 				</p>
 
 				<div class="out hidden" id="alOut" style="margin-top:12px"></div>
@@ -951,6 +1006,21 @@
 
 		$("#opRefresh").onclick = () => runRefresh(out);
 		$("#opRestart").onclick = () => runSSE(`/api/actions/restart/stream?target=${encodeURIComponent("mihomo")}`, out);
+
+		// 定时刷新（面板内置，不需要宿主机 cron）
+		$("#srSave").onclick = async () => {
+			try {
+				await api("/api/refresh/config", {
+					method: "POST",
+					body: { enabled: $("#srEnabled").checked, intervalHours: Number($("#srHours").value) || 6 },
+				});
+				toast("定时刷新设置已保存", "ok");
+				await loadScheduler();
+			} catch (e) {
+				toast(`保存失败: ${e.message}`, "err");
+			}
+		};
+		loadScheduler();
 		$("#opStatsReset").onclick = async () => {
 			if (!confirm("确定把累计流量统计清零？此操作不可撤销。")) return;
 			try {
@@ -1026,6 +1096,7 @@
 			$("#alR_ctn").checked = !!c.rules.containerDown;
 			$("#alR_disk").checked = !!c.rules.diskHigh;
 			$("#alDisk").value = c.rules.diskPercent || 90;
+			$("#alR_heal").checked = c.rules.autoHeal !== false;
 			paintAlertState(d);
 		} catch (e) {
 			toast(`读取告警设置失败: ${e.message}`, "err");
@@ -1053,6 +1124,7 @@
 				containerDown: $("#alR_ctn").checked,
 				diskHigh: $("#alR_disk").checked,
 				diskPercent: Number($("#alDisk").value) || 90,
+				autoHeal: $("#alR_heal").checked,
 			},
 		};
 	}

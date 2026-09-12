@@ -3,8 +3,12 @@
 #
 # 用法:
 #   ./up.sh                       # 首次部署 / 日常启动(自动生成节点池 + 启动面板)
-#   docker compose run --rm bootstrap   # 想立刻刷新一次节点池
-#   docker compose restart mihomo       # 手动重载
+#   ./up.sh --refresh             # 只刷新节点池 + 热重载(不重启容器, 设备不断线)
+#   docker compose run --rm bootstrap   # 只重新抓源生成 config(不会让 mihomo 生效)
+#
+# ⚠ 不要用 `docker compose restart mihomo` 做"刷新节点池" —— 它会停 3~15 秒,
+#   期间 7890 上没有任何监听, 所有设备(含手机 IKEv2 隧道)全部断线。
+#   要用热重载请跑 `./up.sh --refresh`(内部用 mihomo 的 PUT /configs)。
 #
 # 架构:
 #   - bootstrap(轻量镜像): 按 config/sources.txt 抓源 -> 合并去重 ->
@@ -86,6 +90,9 @@ services:
       - SMTP_FROM_NAME=${SMTP_FROM_NAME:-网关告警}
       - ALERT_TO=${ALERT_TO:-}
       - ALERT_ENABLED=${ALERT_ENABLED:-false}
+      # 定时刷新节点池（面板内置，默认开、每 6 小时；也可在面板「运维」页改）
+      - REFRESH_ENABLED=${REFRESH_ENABLED:-}
+      - REFRESH_HOURS=${REFRESH_HOURS:-}
       # 可选：让你的 VPN / ZeroTier 网段在「设备」页显示成友好名字。
       # 逗号分隔的 IP 前缀，例如 ZT_NETS=10.147.0.    VPN_NETS=10.10.0.
       - ZT_NETS=${ZT_NETS:-}

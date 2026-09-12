@@ -6,6 +6,16 @@
 > - [《全局代理折腾记：从"只有 Chrome 能用"到 Windows 临时当网关》](https://tblog.bagoet.cn/posts/network-proxy/chromego-clash-meta-global-proxy/)（问题排查与临时网关方案）
 > - [《把代理装进服务器：ZeroTier 全网共用一台出口》](https://tblog.bagoet.cn/posts/network-proxy/mihomo-server-zerotier-gateway/)（本文档对应的教程）
 
+> ### ⚠ 先看这里：本项目有两套部署方式，**请二选一，不要混用**
+>
+> | 方式 | 说明 | 入口 |
+> | --- | --- | --- |
+> | **方式二（推荐）纯 Docker 自举** | 不需要本地 ChromeGo、不需要迁移；服务器 `git clone` 后一条命令。**带管理面板**。 | 跳到 [方式二](#方式二推荐纯-docker-一键自举)，跑 `./up.sh` |
+> | 方式一 systemd | 需要先在 Windows 上 `migrate-config.sh` 生成配置再 `scp` 上去。**没有管理面板**。 | 往下看 [快速开始](#快速开始三步) |
+>
+> 下面紧跟着的「5 分钟速通 / 快速开始」讲的是**方式一**。只想快点用上的话，请直接跳到「方式二」。
+> **两套混用**会出现"改了配置不生效"和"7890 端口被占"——`install.sh` / `mihomo.service` / `mihomo-node-update.*` / `patch-lan.sh` / `migrate-config.sh` 这五个文件都是**方式一专用**。
+
 ## 5 分钟速通
 
 ```bash
@@ -62,7 +72,7 @@ mihomo-linux-gateway/
 ├─ config.base.yaml          # 公共基础模板(无节点)，纯 Docker 自举时作为底料
 ├─ bootstrap.sh              # bootstrap 容器入口：模板 + merge 生成 ./data/config.yaml
 ├─ Dockerfile.bootstrap      # bootstrap 轻量镜像(alpine+curl)，不含内核
-├─ up.sh                     # 服务器一键：生成 .env→构建→生成节点池→docker compose up
+├─ up.sh                     # ★ 服务器唯一入口：./up.sh 部署；./up.sh --refresh 刷新节点池
 ├─ .env.example              # 环境变量示例(面板密码/监听地址等)
 ├─ docker-compose.yml        # Docker 方式(bootstrap + 官方 mihomo 镜像 + panel)
 ├─ install.sh                # （systemd 方式）服务器安装脚本
@@ -124,12 +134,22 @@ cd /opt/mihomo-gateway
 ./up.sh
 ```
 
-`up.sh` 做了什么（以后每次启动/刷新都跑它）：
+`up.sh` 有两个模式：
+
+**`./up.sh`（部署 / 更新）** —— 首次部署，或改完代码 / `config.base.yaml` 之后跑：
 
 0. 首次运行生成 `.env`（含**随机面板密码**），之后复用
 1. 构建 `bootstrap` / `panel` 镜像
 2. 跑一次 `bootstrap`：按 `config/sources.txt` 抓源 → 去重合并 → 用内置 `config.base.yaml` 生成 `./data/config.yaml`；本次拉源全挂但已有旧 config 时**沿用旧配置不中断**
-3. `docker compose up -d` 启动 mihomo（官方镜像，`0.0.0.0:7890`）与 panel（`0.0.0.0:9091`）
+3. `docker compose up -d` 启动 mihomo（官方镜像，`0.0.0.0:7890`）与 panel（`0.0.0.0:9091`），最后**热重载** mihomo
+
+**`./up.sh --refresh`（日常 / 定时刷新）** —— 只抓源 + 热重载，**不建镜像、不动容器，设备不会断线**：
+
+```bash
+./up.sh --refresh
+# 定时（宿主机 cron）：
+# 0 */6 * * * cd /opt/mihomo-gateway && ./up.sh --refresh >> /var/log/mihomo-node-refresh.log 2>&1
+```
 
 跑完会打印面板地址和密码。
 
@@ -139,9 +159,10 @@ cd /opt/mihomo-gateway
 | --- | --- |
 | 启动 / 查看 | `./up.sh` → `docker compose ps` / `docker compose logs -f` |
 | 打开管理面板 | 浏览器访问 `http://<服务器IP>:9091`（密码见 `.env`） |
-| 立刻刷新一次节点池 | 面板「运维 → 刷新节点池」，或 `docker compose run --rm bootstrap && docker compose restart mihomo` |
+| 立刻刷新一次节点池 | 面板「运维 → 刷新节点池」，或 `./up.sh --refresh` |
 | 改节点源 | 编辑 `config/sources.txt`，或面板「节点源」页在线改 |
-| 定时自动刷新（可选） | 宿主机 cron：`0 */6 * * * cd /opt/mihomo-gateway && docker compose run --rm bootstrap && docker compose restart mihomo` |
+| **定时自动刷新** | **面板「运维 → 定时刷新节点池」里开关**（默认开、每 6 小时）。**不需要宿主机 cron。** |
+| 定时刷新（不想用面板） | 宿主机 cron：`0 */6 * * * cd /opt/mihomo-gateway && ./up.sh --refresh >> /var/log/mihomo-node-refresh.log 2>&1` |
 | 更新工程代码 | `git pull && ./up.sh` |
 | 看生成的节点池 | `cat data/config.yaml`（仅本机，不入 git） |
 
@@ -152,6 +173,35 @@ cd /opt/mihomo-gateway
 - **不依赖构建时访问 GitHub**：内核来自 `metacubex/mihomo:latest` 官方镜像，bootstrap 只装 curl/bash
 - **`user: root`** 避免 ./data 写权限问题（单用户内网网关可接受；介意可去掉并自行 `chown`）
 - 防火墙照旧在**宿主机**配 ufw，只放行 ZeroTier 网段到 7890
+
+### ⚠ 刷新节点池：用 `./up.sh --refresh`，别用 `restart`
+
+**这是最容易踩、也最难查的一个坑。**
+
+`docker compose restart mihomo` 会让 mihomo 停 3~15 秒，这段时间 7890 上**没有任何监听**，所有设备（含手机的 IKEv2 隧道）**全部断线**。一旦把它写进 cron 每 6 小时跑一次，就变成"每 6 小时所有设备断一次"，而且**断了没有任何提示** —— 很容易被误判成"节点又挂了 / 免费源又失效了"，去查半天。
+
+`./up.sh --refresh` 做的是同一件事，但用 mihomo 的 `PUT /configs` 接口**热重载配置**：进程不退出、容器不重启、正在走的连接不断。
+
+```bash
+./up.sh --refresh        # 抓源 → 生成新 config → 热重载 mihomo(不重启容器)
+```
+
+> 只有热重载接口不可用时，它才会回退成重启容器（可用性让位于正确性）。
+>
+> **如果你已经把 cron 写成了 `./up.sh`（不带参数），请改成 `./up.sh --refresh`。** 不带参数的 `up.sh` 是**部署**脚本（会重建镜像 + `docker compose up -d`），不适合放进定时任务。
+>
+> ### 更推荐：根本不用配 cron
+>
+> 面板「运维 → 定时刷新节点池」**已经内置了定时刷新**：默认开启、每 6 小时一次，可以在网页上改间隔或关掉，还会显示"上次执行/下次执行"。
+>
+> 为什么放在面板里而不是宿主机 cron：
+>
+> - **零配置** —— 装好就有，不用 SSH、不用 `crontab -e`、不用理解 systemd timer
+> - **不会和方式一（systemd）的 timer 冲突** —— 两套部署方式的坑少一个
+> - 面板容器是 `restart: unless-stopped`，**机器重启后它自己会起来**，定时刷新跟着恢复
+> - 和「节点全挂自动救援」「手动刷新」**共用同一份实现**（`panel/lib/refresh.js`，带并发锁），三条路径不会互相打架
+>
+> 想用宿主机 cron 也行（`./up.sh --refresh`），但**别和面板里的定时刷新同时开**，否则会重复抓源。
 
 ## 管理面板（panel）
 
@@ -172,7 +222,7 @@ grep PANEL_PASSWORD .env
 | **节点** | 策略组切换、节点列表、单个/全部测速 |
 | **日志** | mihomo 容器日志实时滚动（可暂停、清屏、重连） |
 | **节点源** | 在线编辑 `config/sources.txt`，保存后一键刷新节点池 |
-| **运维** | 刷新节点池、重启 mihomo、流量统计清零、容器启停 |
+| **运维** | 刷新节点池、**定时刷新开关 / 间隔**、重启 mihomo、流量统计清零、容器启停、邮件告警（含"节点全挂自动救援"） |
 
 > **为什么流量统计要自己做？** mihomo 的 API 只给「每条活动连接当前的字节数」和「瞬时速率」；连接一关数据就没了。所以 panel 每 2 秒采样一次 `/connections`，按增量累加，并定期落盘到 `data/panel/traffic.json`，重启不丢。
 
@@ -237,6 +287,8 @@ https://www.67867867.xyz/Alvin9999/PAC/.../clash.meta2/{i}/config.yaml
 - 只在**状态变化**时发信（正常→异常发一封「告警」，异常→正常发一封「恢复」）
 - 一直没恢复的话，每 N 小时提醒一次（默认 6 小时）
 - 最核心的检查项是「**所有节点均不可用**」：它会对策略组里每个节点做一次真实测速，一个都不通才发信
+- **「节点全挂时自动重抓源」（自救，默认开）**：检测到全挂就自动重新抓源 + 热重载，10 分钟冷却，救援过程写进邮件。
+  > 它**只能重拉你已配置的那些源，变不出源里本来就没有的节点**。治的是"节点 IP 漂移 / 上游短暂抽风"，治不了"上游彻底不发节点了"——那种情况只能换源。
 
 > 隐私：SMTP 密码只存在服务器上的 `data/panel/alerts.json`（已 gitignore），前端回显永远是打码的（`__SET__`），也不会写进日志。
 >
@@ -342,19 +394,36 @@ sudo systemctl restart mihomo
 
 它做了什么：
 
-- 抓取 ChromeGo 的 6 个镜像源（gitlab + 备用域，单源失败自动跳过），解析各自 hysteria 节点，按 `server:port` 去重
-- `proxies` 换成合并后的全部节点；新增 `♻️ 自动切换`（`url-test`，每 60s 测活，**坏 IP 自动摘除、自动用活 IP**）
+- 按 `config/sources.txt` 抓全部源（单源失败自动跳过），解析节点并按「协议 + 地址 + 端口 + 凭据」去重
+- **支持 `hysteria` / `hysteria2` / `vmess` / `vless` / `trojan` / `ss` / `ssr` / `socks5` / `http` / `tuic` / `anytls` / `snell` 等**，并且**按块原样保留**节点定义（`sni` / `alpn` / `ws-opts` / `reality-opts` / `uuid` 等字段一个都不丢）
+- 自动丢掉明显无效的节点：`server` 指向本机 / 私有网段（公开源里真有这种占位假节点）、端口非法、协议不在白名单
+- `proxies` 换成合并后的全部节点；新增 `♻️ 自动切换`（`url-test` 测活，**坏节点自动摘除、自动用活的**）
 - `🚀 节点选择` 顶层组默认指向自动切换；原 rules 引用的策略组全部保留
 - 头部（`allow-lan`/`mixed-port`/`dns` 等）与 `rules` 原样保留，只换节点池
 
-定时自愈（可选，推荐）：
+> **升级提醒**：旧版解析器只认 `type: hysteria` 一种协议（正则末尾带 `$` 锚定），
+> `hysteria2` / `vmess` / `vless` / `ss` / `trojan` 会被**静默丢弃** —— 这就是
+> "源里明明有几百个节点，却只抓到 1~2 个"的根因。现在已支持多协议。
+>
+> 两个可调项（环境变量，一般不用动）：
+>
+> - `TEST_INTERVAL`（默认 `60`）：`url-test` 测活间隔秒数。接了几十~几百个节点的订阅后建议设 `300`，否则内核会一直在测速
+> - `FILL_HYSTERIA_DEFAULTS`（默认 `1`）：源里缺 `up`/`down`/`sni`/`skip-cert-verify` 时是否补默认值。`hysteria`(v1) 的 `up`/`down` 是**必填**，不补 mihomo 直接启动失败；自建节点有正式证书时可设 `0`
+>
+> 生成的配置已用真实 mihomo 内核 `-t` 校验通过（7 种协议 + 嵌套字段 + 新旧 DNS 配置）。
+
+定时自愈（可选）：
 
 ```bash
 sudo cp mihomo-node-update.service mihomo-node-update.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now mihomo-node-update.timer   # 每天 05:30 / 17:30 自动刷新并重启 mihomo
+sudo systemctl enable --now mihomo-node-update.timer   # 每天 05:30 / 17:30 自动刷新 mihomo
 systemctl list-timers mihomo-node-update.timer         # 确认已生效
 ```
+
+> **这段是「方式一（systemd 安装）」专用的。** 如果你用的是**方式二（Docker）**，不要装它 —— 它操作的是 `/etc/mihomo/config.yaml`（systemd 那套的路径）并执行 `systemctl restart mihomo`，在 Docker 部署下要么找不到文件、要么和 Docker 抢 7890 端口。Docker 部署请用 `./up.sh --refresh`（见上文「刷新节点池」）。
+>
+> 两套方式**务必二选一**，混用会出现"改了配置没生效"和"端口被占"这类问题。
 
 > 提醒：源里的免费节点随时可能全部失效；若两三个周期后节点全红，说明需要换一套源 —— 编辑 **`config/sources.txt`**（或在管理面板的「节点源」页改），再跑一次 `./up.sh`（或点面板上的「刷新节点池」）。
 

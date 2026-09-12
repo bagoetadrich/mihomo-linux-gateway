@@ -7,6 +7,10 @@
 //   containerDown   mihomo 容器没在运行
 //   diskHigh        磁盘占用超过阈值
 //
+// 自动救援（rules.autoHeal，默认开，面板「运维 → 邮件告警」里可关）：
+//   检测到 nodesAllDown 时，自动"重新抓源 + 热重载"，再把救援结果写进告警邮件。
+//   10 分钟冷却。它只能重拉你已配置的那些源，变不出源里本来就没有的节点。
+//
 // 行为：
 //   - 只在「状态发生变化」时发信（好→坏 发一封；坏→好 发一封恢复）
 //   - 一直没恢复的话，每隔 repeatHours 小时提醒一次
@@ -17,6 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { diskInfo, dockerListContainers, mihomo } from "./core.js";
+import { refreshNodes } from "./refresh.js";
 import { sendMail } from "./mailer.js";
 
 const DATA_DIR = process.env.PANEL_DATA || "/data";
@@ -34,6 +39,8 @@ const DEFAULTS = {
 		containerDown: true,
 		diskHigh: true,
 		diskPercent: 90,
+		// 检测到「所有节点均不可用」时，自动重新抓源 + 热重载（不用你动手）
+		autoHeal: true,
 	},
 	intervalMin: 5,
 	repeatHours: 6,
@@ -199,6 +206,50 @@ async function checkNodes() {
 	};
 }
 
+// ---------------- 自动救援 ----------------
+// 检测到「所有节点均不可用」时，自动重新抓源 + 热重载，尽量不用你动手。
+//
+// 能力边界（重要）：
+//   它只能把「你自己配的那些源」重新拉一遍，
+//   **变不出源里本来就没有的节点**。
+//   所以它治的是"节点 IP 漂移 / 临时抖动 / 上游短暂抽风"，
+//   治不了"上游彻底不发节点了" —— 那种情况只能换源，靠邮件通知你。
+//
+// 与另外几层的分工：
+//   1) url-test（mihomo 自己）        每 60s 测活，单节点挂了自动不用它   -> 秒级
+//   2) 面板内置定时刷新（scheduler）   每 N 小时重新抓源，跟上 IP 漂移     -> 小时级
+//   3) 本函数（面板告警线程）          发现"一个都不通"时立刻抓源 + 热重载 -> 自动
+//   4) 邮件                          还不行就发信告诉你"我尽力了"       -> 让你知道
+//
+// 抓源和热重载本身都在 refresh.js 里，这里只负责"什么时候救"。
+const HEAL_COOLDOWN_MS = 10 * 60_000; // 10 分钟内最多救一次，避免反复拉源
+
+let lastHealAt = 0;
+let healing = false;
+
+async function autoHeal(reason) {
+	if (healing) return { ok: false, steps: ["已有一次救援在进行中，跳过"] };
+	if (Date.now() - lastHealAt < HEAL_COOLDOWN_MS) {
+		const m = Math.ceil((HEAL_COOLDOWN_MS - (Date.now() - lastHealAt)) / 60000);
+		return { ok: false, steps: [`距上次救援不足 ${m} 分钟，本轮处于冷却期，跳过`] };
+	}
+	healing = true;
+	lastHealAt = Date.now();
+	const steps = [`触发原因：${reason}`];
+	try {
+		const r = await refreshNodes((m) => steps.push(m));
+		if (!r.ok) throw new Error(r.error || "刷新失败");
+		const after = await checkNodes().catch(() => null);
+		if (after) steps.push(`复查：${after.detail}`);
+		return { ok: !!(after && after.ok), steps };
+	} catch (e) {
+		steps.push(`救援失败：${e.message}`);
+		return { ok: false, steps };
+	} finally {
+		healing = false;
+	}
+}
+
 async function runChecks() {
 	const results = {};
 
@@ -284,6 +335,21 @@ function buildMail(problems, recovered) {
 	return lines.join("\n");
 }
 
+/** SMTP 是否配置完整（不完整就只记录事件、不发信） */
+function smtpReady() {
+	return !!(cfg.smtp.host && cfg.smtp.user && cfg.smtp.pass && cfg.to);
+}
+
+/**
+ * 什么时候需要跑检查循环：
+ *   1) 邮件告警开着且 SMTP 配好了        -> 检查 + 发信
+ *   2) 只开了「自动救援」（没配邮件也认） -> 只检查 + 自救，不发信
+ * 这样"我只想要自动救、不想要邮件"也能工作。
+ */
+function shouldCheck() {
+	return (cfg.enabled && smtpReady()) || !!cfg.rules.autoHeal;
+}
+
 async function dispatch(problems, recovered) {
 	if (!problems.length && !recovered.length) return;
 	const subject = problems.length
@@ -300,6 +366,7 @@ async function dispatch(problems, recovered) {
 	};
 
 	try {
+		if (!smtpReady()) throw new Error("SMTP 未配置完整（或未启用邮件告警），本次只记录事件不发信");
 		await sendMail({
 			host: cfg.smtp.host,
 			port: cfg.smtp.port,
@@ -354,6 +421,15 @@ export async function checkNow() {
 			}
 		}
 
+		// 「所有节点均不可用」-> 先自动救一次，再把救援结果写进详情/邮件
+		if (cfg.rules.autoHeal && problems.some((p) => p.key === "nodesAllDown")) {
+			const heal = await autoHeal("所有节点均不可用");
+			for (const p of problems) {
+				if (p.key === "nodesAllDown") p.detail = `${p.detail}；自动救援：${heal.steps.join("；")}`;
+			}
+			pushHistory({ at: Date.now(), kind: "heal", subject: "自动救援", steps: heal.steps });
+		}
+
 		lastCheck = now;
 		if (problems.length || recovered.length) {
 			const sent = await dispatch(problems, recovered);
@@ -398,22 +474,21 @@ export function restart() {
 		clearInterval(timer);
 		timer = null;
 	}
-	if (!cfg.enabled) return;
-	if (!cfg.smtp.host || !cfg.smtp.user || !cfg.smtp.pass || !cfg.to) {
-		console.warn("[alerts] 已启用但配置不完整（需要 smtp.host/user/pass 与收件人），暂不启动");
-		return;
+	if (!shouldCheck()) return;
+	if (cfg.enabled && !smtpReady()) {
+		console.warn("[alerts] 邮件告警已启用但 SMTP 配置不完整：只跑自动救援，不发信");
 	}
 	const ms = Math.max(60_000, cfg.intervalMin * 60_000);
 	timer = setInterval(() => {
 		checkNow().catch((e) => console.warn(`[alerts] 检查出错: ${e.message}`));
 	}, ms);
 	timer.unref?.();
-	console.log(`[alerts] 已启用，每 ${cfg.intervalMin} 分钟检查一次`);
+	console.log(`[alerts] 检查已启动，每 ${cfg.intervalMin} 分钟一次${cfg.rules.autoHeal ? "（含节点全挂自动救援）" : ""}`);
 }
 
 export function start() {
 	load();
-	if (cfg.enabled) {
+	if (shouldCheck()) {
 		// 启动后延迟 20 秒做第一次检查，避免和容器启动抢资源
 		const t = setTimeout(() => checkNow().catch(() => {}), 20000);
 		t.unref?.();

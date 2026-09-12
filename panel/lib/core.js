@@ -183,6 +183,15 @@ export async function mihomo(method, apiPath, body, timeoutMs = 4000) {
 	return data;
 }
 
+/**
+ * 让 mihomo 重新读取配置文件 —— 不退出进程、不重启容器，因此不会断掉
+ * 正在走的连接。刷新节点池应该用它，而不是 docker restart。
+ * 失败会抛错，调用方据此回退为「重启容器」。
+ */
+export async function mihomoReloadConfig(timeoutMs = 15000) {
+	await mihomo("PUT", "/configs?force=true", { path: "" }, timeoutMs);
+}
+
 // ---------------- 系统信息（Linux） ----------------
 let lastCpu = null;
 
