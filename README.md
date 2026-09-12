@@ -405,10 +405,11 @@ sudo systemctl restart mihomo
 > `hysteria2` / `vmess` / `vless` / `ss` / `trojan` 会被**静默丢弃** —— 这就是
 > "源里明明有几百个节点，却只抓到 1~2 个"的根因。现在已支持多协议。
 >
-> 两个可调项（环境变量，一般不用动）：
+> 三个可调项（环境变量，一般不用动）：
 >
 > - `TEST_INTERVAL`（默认 `60`）：`url-test` 测活间隔秒数。接了几十~几百个节点的订阅后建议设 `300`，否则内核会一直在测速
 > - `FILL_HYSTERIA_DEFAULTS`（默认 `1`）：源里缺 `up`/`down`/`sni`/`skip-cert-verify` 时是否补默认值。`hysteria`(v1) 的 `up`/`down` 是**必填**，不补 mihomo 直接启动失败；自建节点有正式证书时可设 `0`
+> - `ALLOW_IPV6`（默认 `0`）：本项目面向**纯 IPv4**（IKEv2 隧道、规则、DNS 都只跑 v4），所以默认会丢掉 IPv6 节点（`2a14:...`、`[2001:db8::1]`）。**域名型 `server` 不受影响**（订阅里很多是域名）。服务器确实有可用 IPv6 时才设 `1`
 >
 > 生成的配置已用真实 mihomo 内核 `-t` 校验通过（7 种协议 + 嵌套字段 + 新旧 DNS 配置）。
 
